@@ -33,6 +33,8 @@ h2{font-size:20px;margin:0}
 .trans{font-size:24px;margin-top:10px;color:var(--ink)}
 .ex{margin-top:16px;padding:12px;border-radius:12px;background:#f6f7fb;font-size:16px;cursor:pointer}
 .ex span{display:block;color:var(--mute);font-size:14px;margin-top:2px}
+.trbtn{display:block;margin:8px auto 0;font:inherit;font-size:14px;padding:8px 14px;border-radius:20px;border:1px solid var(--line);background:var(--card);color:var(--blue);cursor:pointer}
+.trtext{margin-top:8px;padding:10px 12px;border-radius:12px;background:#eaf0ff;color:var(--ink);font-size:15px}
 .spk{width:76px;height:76px;border-radius:50%;border:0;background:#eaf0ff;font-size:32px;cursor:pointer;margin-bottom:14px}
 .spk:active{background:#d5e1ff}
 .spk.sm{width:44px;height:44px;font-size:20px;margin:0;flex:none}

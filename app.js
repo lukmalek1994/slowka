@@ -8,10 +8,15 @@ var GROUP = 20;
 
 var COURSES = {
   es: { name: 'Español', flag: '🇪🇸', lang: 'es-ES', sub: '1000 najczęstszych słów · Hiszpania',
-        raw: function () { return [].concat(window.WORDS_ES_1 || [], window.WORDS_ES_2 || [], window.WORDS_ES_3 || []); }, max: 1000 },
+        raw: function () { return [].concat(join(window.WORDS_ES_1, window.TR_ES_1), join(window.WORDS_ES_2, window.TR_ES_2), join(window.WORDS_ES_3, window.TR_ES_3)); }, max: 1000 },
+  it: { name: 'Italiano', flag: '🇮🇹', lang: 'it-IT', sub: '1000 najczęstszych słów · Włochy',
+        raw: function () { return [].concat(join(window.WORDS_IT_1, window.TR_IT_1), join(window.WORDS_IT_2, window.TR_IT_2)); }, max: 1000 },
   en: { name: 'English', flag: '🇺🇸', lang: 'en-US', sub: 'Trudniejsze słownictwo B2 → C1 · USA',
-        raw: function () { return window.WORDS_EN_1 || []; } }
+        raw: function () { return join(window.WORDS_EN_1, window.TR_EN_1); } }
 };
+function join(rows, tr) {
+  return (rows || []).map(function (r, i) { return [r[0], r[1], r[2], (tr && tr.length === rows.length && tr[i]) || '']; });
+}
 
 /* ---------- dane i zapis ---------- */
 var db = loadDb();
@@ -21,7 +26,9 @@ function loadDb() {
   if (!d || typeof d !== 'object') d = {};
   d.p = d.p || {};
   d.days = d.days || {};
-  d.s = Object.assign({ rate: 0.9, auto: true, vEs: '', vEn: '' }, d.s || {});
+  d.s = Object.assign({ rate: 0.9, auto: true, ves: '', ven: '', vit: '' }, d.s || {});
+  if (d.s.vEs && !d.s.ves) d.s.ves = d.s.vEs;
+  if (d.s.vEn && !d.s.ven) d.s.ven = d.s.vEn;
   return d;
 }
 function save() { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) {} }
@@ -32,7 +39,7 @@ function words(c) {
     var seen = {};
     cache[c] = COURSES[c].raw().filter(function (r) {
       if (!r || !r[0] || seen[r[0]]) return false; seen[r[0]] = 1; return true;
-    }).slice(0, COURSES[c].max || 9999).map(function (r, i) { return { id: c + ':' + r[0], c: c, w: r[0], p: r[1], ex: r[2] || '', i: i }; });
+    }).slice(0, COURSES[c].max || 9999).map(function (r, i) { return { id: c + ':' + r[0], c: c, w: r[0], p: r[1], ex: r[2] || '', tr: r[3] || '', i: i }; });
   }
   return cache[c];
 }
@@ -69,7 +76,7 @@ function langVoices(c) {
 function voiceFor(c) {
   var lang = COURSES[c].lang.toLowerCase();
   var list = langVoices(c);
-  var saved = db.s[c === 'es' ? 'vEs' : 'vEn'];
+  var saved = db.s['v' + c];
   if (saved) { for (var i = 0; i < list.length; i++) if (list[i].voiceURI === saved) return list[i]; }
   var exact = list.filter(function (v) { return v.lang.replace('_', '-').toLowerCase() === lang; });
   if (exact.length) list = exact;
@@ -97,7 +104,9 @@ function norm(s) {
   s = String(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\(.*?\)/g, ' ').replace(/[.,!?;:¿¡]/g, '').replace(/\s+/g, ' ').trim();
   return s;
 }
-function core(s) { return norm(s).replace(/^(el|la|los|las|un|una)(\/(el|la))?\s+/, '').replace(/^to\s+/, ''); }
+function core(s) {
+  return norm(s).replace(/[’‘`]/g, "'").replace(/^(el|la|los|las|un|una|il|lo|i|gli|le|uno)(\/(el|la))?\s+/, '').replace(/^(l'|un')\s*/, '').replace(/^to\s+/, '');
+}
 function targets(w) { return w.split('/').length > 1 && !/^(el|la)\//.test(w) ? [w] : [w]; }
 function matches(input, w) {
   var a = core(input); if (!a) return false;
@@ -105,6 +114,10 @@ function matches(input, w) {
   // warianty typu "el/la artista" lub "bonito/a"
   var v = norm(w).replace(/^(el|la)\/(el|la)\s+/, '');
   return a === core(v) || a === norm(v);
+}
+function trBlock(w, open, k) {
+  if (!w.tr) return '';
+  return open ? '<div class="trtext">🇵🇱 ' + esc(w.tr) + '</div>' : '<button class="trbtn" data-act="tr" data-k="' + k + '">🇵🇱 Pokaż po polsku</button>';
 }
 function pct(a, b) { return b ? Math.round(a / b * 100) : 0; }
 function plural(n, one, few, many) { var m10 = n % 10, m100 = n % 100; if (n === 1) return one; if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few; return many; }
@@ -168,7 +181,7 @@ function vLesson() {
   var h = '<button class="back" data-act="lessons" data-c="' + c + '">‹ Lista</button><h1>Zestaw ' + (g + 1) + '</h1><div class="card">';
   part.forEach(function (w) {
     h += '<div class="wrow" data-act="word" data-id="' + esc(w.id) + '"><button class="spk sm" aria-label="Odtwórz">🔊</button><div class="grow" style="flex:1"><div class="w">' + esc(w.w) + '</div><div class="t">' + esc(w.p) + '</div></div><span class="dot ' + dotClass(db.p[w.id]) + '"></span></div>';
-    if (view.open === w.id && w.ex) h += '<div class="wex" data-act="say-ex" data-id="' + esc(w.id) + '">' + esc(w.ex) + ' 🔊</div>';
+    if (view.open === w.id && w.ex) h += '<div class="wex"><div data-act="say-ex" data-id="' + esc(w.id) + '">' + esc(w.ex) + ' 🔊</div>' + trBlock(w, view.trOpen === w.id, 'list') + '</div>';
   });
   return h + '</div>';
 }
@@ -197,7 +210,7 @@ function vIntro() {
   return '<div class="top"><button class="back" data-act="quit">✕ Zamknij</button><div class="sbar"><i style="width:' + pct(S.ii, S.intro.length) + '%"></i></div><span class="mute">' + (S.ii + 1) + '/' + S.intro.length + '</span></div>' +
     '<div class="card stage"><button class="spk" data-act="say" data-t="' + esc(w.w) + '" aria-label="Odtwórz">🔊</button>' +
     '<div class="big">' + esc(w.w) + '</div><div class="trans">' + esc(w.p) + '</div>' +
-    (w.ex ? '<div class="ex" data-act="say" data-t="' + esc(w.ex) + '">' + esc(w.ex) + ' 🔊</div>' : '') + '</div>' +
+    (w.ex ? '<div class="ex" data-act="say" data-t="' + esc(w.ex) + '">' + esc(w.ex) + ' 🔊</div>' + trBlock(w, S.trOpen, 'intro') : '') + '</div>' +
     '<button class="btn sec" data-act="slow" data-t="' + esc(w.w) + '">🐢 Wolniej</button>' +
     '<button class="btn" data-act="introNext">' + (S.ii + 1 < S.intro.length ? 'Dalej' : 'Zaczynamy ćwiczenia') + '</button>';
 }
@@ -223,7 +236,7 @@ function nextQ() {
   if (!S.queue.length) return go({ name: 'summary' });
   var q = S.queue[0];
   q.type = pickType(q);
-  q.state = null;
+  q.state = null; q.trOpen = false;
   if (q.type === 'c1' || q.type === 'c2') q.options = makeOptions(q);
   S.q = q;
   go({ name: 'quiz' });
@@ -255,7 +268,7 @@ function vQuiz() {
   if (st) {
     h += '<div class="fb ' + (st.ok ? 'ok' : 'bad') + '">' + (st.ok ? '✓ Dobrze! ' : '✗ Poprawnie: ') + '<b>' + esc(w.w) + '</b> — ' + esc(w.p) +
       (st.note ? '<div style="margin-top:4px">' + esc(st.note) + '</div>' : '') +
-      (w.ex ? '<div style="margin-top:8px;cursor:pointer" data-act="say" data-t="' + esc(w.ex) + '">' + esc(w.ex) + ' 🔊</div>' : '') + '</div>';
+      (w.ex ? '<div style="margin-top:8px;cursor:pointer" data-act="say" data-t="' + esc(w.ex) + '">' + esc(w.ex) + ' 🔊</div>' + trBlock(w, q.trOpen, 'quiz') : '') + '</div>';
     h += '<button class="btn" data-act="next">Dalej</button>';
   }
   return h;
@@ -314,12 +327,12 @@ function voiceSelect(c, label) {
   var list = langVoices(c), cur = voiceFor(c), h = '<label>' + label + '</label><div class="row2"><select data-act="voice" data-c="' + c + '">';
   if (!list.length) h += '<option>Brak głosów na tym urządzeniu</option>';
   list.forEach(function (v) { h += '<option value="' + esc(v.voiceURI) + '"' + (cur && cur.voiceURI === v.voiceURI ? ' selected' : '') + '>' + esc(v.name + ' (' + v.lang + ')') + '</option>'; });
-  return h + '</select><button class="icon" data-act="say" data-t="' + (c === 'es' ? 'Hola, ¿cómo estás?' : 'Hello, how are you?') + '" data-c="' + c + '">🔊</button></div>';
+  return h + '</select><button class="icon" data-act="say" data-t="' + ({ es: 'Hola, ¿cómo estás?', it: 'Ciao, come stai?', en: 'Hello, how are you?' }[c]) + '" data-c="' + c + '">🔊</button></div>';
 }
 function vSettings() {
   var h = '<button class="back" data-act="home">‹ Wróć</button><h1>Ustawienia</h1><div class="card"><h2>Głos</h2>';
   if (!hasTTS) h += '<p class="mute">Ta przeglądarka nie obsługuje syntezy mowy.</p>';
-  h += voiceSelect('es', 'Hiszpański') + voiceSelect('en', 'Angielski');
+  h += voiceSelect('es', 'Hiszpański') + voiceSelect('it', 'Włoski') + voiceSelect('en', 'Angielski');
   h += '<label>Tempo wymowy</label><select data-act="rate">' + [[0.7, 'Wolno'], [0.9, 'Normalnie'], [1.05, 'Szybko']].map(function (o) { return '<option value="' + o[0] + '"' + (db.s.rate === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select>';
   h += '<label>Automatyczne odtwarzanie</label><select data-act="auto"><option value="1"' + (db.s.auto ? ' selected' : '') + '>Włączone</option><option value="0"' + (db.s.auto ? '' : ' selected') + '>Wyłączone</option></select>';
   h += '<p class="mute">Lepsze głosy pobierzesz na iPhonie w: Ustawienia → Dostępność → Treści czytane na głos → Głosy.</p></div>';
@@ -335,7 +348,8 @@ function checkTyped() {
   var inp = document.getElementById('ans'), q = S.q;
   if (!inp || q.state || !inp.value.trim()) return;
   var v = inp.value, ok = matches(v, q.w.w), note = '';
-  if (ok && v.trim().toLowerCase() !== q.w.w.toLowerCase() && core(v) !== q.w.w.toLowerCase().replace(/^(el|la|los|las)\s+/, '')) note = 'Zwróć uwagę na akcenty / pisownię: ' + q.w.w;
+  function art(s) { return s.trim().toLowerCase().replace(/[’‘`]/g, "'").replace(/^(el|la|los|las|un|una|il|lo|i|gli|le|uno)\s+/, '').replace(/^(l'|un')\s*/, ''); }
+  if (ok && art(v) !== art(q.w.w) && v.trim().toLowerCase() !== q.w.w.toLowerCase()) note = 'Zwróć uwagę na akcenty / pisownię: ' + q.w.w;
   answer(ok, v, note); render();
 }
 
@@ -361,8 +375,13 @@ document.addEventListener('click', function (e) {
     case 'say': return speak(el.getAttribute('data-t'), c || (S ? S.c : view.c));
     case 'slow': return speak(el.getAttribute('data-t'), S ? S.c : view.c, true);
     case 'quit': S = null; return go({ name: 'home' });
+    case 'tr': {
+      var k = el.getAttribute('data-k');
+      if (k === 'intro') S.trOpen = true; else if (k === 'quiz') S.q.trOpen = true; else view.trOpen = view.open;
+      return render();
+    }
     case 'introNext':
-      if (S.ii + 1 < S.intro.length) { S.ii++; render(); speakIntro(); } else beginQuiz();
+      if (S.ii + 1 < S.intro.length) { S.ii++; S.trOpen = false; render(); speakIntro(); } else beginQuiz();
       return;
     case 'pick': {
       var q = S.q; if (q.state) return;
@@ -395,12 +414,12 @@ document.addEventListener('click', function (e) {
       return;
   }
 });
-function loadDbFix() { db.p = db.p || {}; db.days = db.days || {}; db.s = Object.assign({ rate: 0.9, auto: true, vEs: '', vEn: '' }, db.s || {}); }
+function loadDbFix() { db.p = db.p || {}; db.days = db.days || {}; db.s = Object.assign({ rate: 0.9, auto: true, ves: '', ven: '', vit: '' }, db.s || {}); }
 
 document.addEventListener('change', function (e) {
   var el = e.target; if (el.tagName !== 'SELECT') return;
   var a = el.getAttribute('data-act');
-  if (a === 'voice') db.s[el.getAttribute('data-c') === 'es' ? 'vEs' : 'vEn'] = el.value;
+  if (a === 'voice') db.s['v' + el.getAttribute('data-c')] = el.value;
   else if (a === 'rate') db.s.rate = parseFloat(el.value);
   else if (a === 'auto') db.s.auto = el.value === '1';
   save();
