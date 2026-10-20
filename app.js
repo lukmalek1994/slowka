@@ -128,10 +128,15 @@ function voiceFor(c) {
   if (saved) { for (var i = 0; i < list.length; i++) if (list[i].voiceURI === saved) return list[i]; }
   var exact = list.filter(function (v) { return v.lang.replace('_', '-').toLowerCase() === lang; });
   if (exact.length) list = exact;
-  function score(v) { return /premium/i.test(v.name) ? 3 : /enhanced|improved|siri/i.test(v.name) ? 2 : v.localService ? 1 : 0; }
-  list = list.slice().sort(function (a, b) { return score(b) - score(a); });
+  list = list.slice().sort(function (a, b) { return vq(b) - vq(a); });
   return list[0] || null;
 }
+// jakość głosu na podstawie nazwy i identyfikatora (iOS oznacza głosy pobrane jako Enhanced / Premium)
+function vq(v) {
+  var s = (v.name + ' ' + v.voiceURI).toLowerCase();
+  return /premium/.test(s) ? 3 : /enhanced|improved|siri/.test(s) ? 2 : v.localService ? 1 : 0;
+}
+function vqLabel(v) { var q = vq(v); return q === 3 ? '★★★ Premium' : q === 2 ? '★★ Enhanced' : '★ standard'; }
 function clean(t) { return String(t).replace(/\(.*?\)/g, ' ').replace(/\//g, ' ').replace(/\s+/g, ' ').trim(); }
 // iOS: cichy dźwięk w tle przełącza sesję audio na „odtwarzanie”, dzięki czemu mowa bywa słyszalna mimo trybu cichego
 var silent = null;
@@ -568,9 +573,11 @@ function vSummary() {
 
 /* ---------- ustawienia ---------- */
 function voiceSelect(c, label) {
-  var list = langVoices(c), cur = voiceFor(c), h = '<label>' + label + '</label><div class="row2"><select data-act="voice" data-c="' + c + '">';
+  var seen = {}, list = langVoices(c).filter(function (v) { if (seen[v.voiceURI]) return false; seen[v.voiceURI] = 1; return true; })
+    .sort(function (a, b) { return vq(b) - vq(a) || a.name.localeCompare(b.name); });
+  var cur = voiceFor(c), h = '<label>' + label + ' <span class="mute" style="font-weight:400">· głosów: ' + list.length + '</span></label><div class="row2"><select data-act="voice" data-c="' + c + '">';
   if (!list.length) h += '<option>Brak głosów na tym urządzeniu</option>';
-  list.forEach(function (v) { h += '<option value="' + esc(v.voiceURI) + '"' + (cur && cur.voiceURI === v.voiceURI ? ' selected' : '') + '>' + esc(v.name + ' (' + v.lang + ')') + '</option>'; });
+  list.forEach(function (v) { h += '<option value="' + esc(v.voiceURI) + '"' + (cur && cur.voiceURI === v.voiceURI ? ' selected' : '') + '>' + esc(v.name + ' · ' + v.lang.replace('_', '-') + ' · ' + vqLabel(v)) + '</option>'; });
   return h + '</select><button class="icon" data-act="say" data-t="' + ({ es: 'Hola, ¿cómo estás?', it: 'Ciao, come stai?', en: 'Hello, how are you?' }[c]) + '" data-c="' + c + '">🔊</button></div>';
 }
 function vSettings() {
@@ -582,7 +589,8 @@ function vSettings() {
   h += '<p class="mute">Jeśli nadal nic nie słychać, sprawdź przełącznik dzwonka z boku iPhone\'a i głośność multimediów (przyciski głośności).</p>';
   h += '<label>Tempo wymowy</label><select data-act="rate">' + [[0.7, 'Wolno'], [0.9, 'Normalnie'], [1.05, 'Szybko']].map(function (o) { return '<option value="' + o[0] + '"' + (db.s.rate === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select>';
   h += '<label>Automatyczne odtwarzanie</label><select data-act="auto"><option value="1"' + (db.s.auto ? ' selected' : '') + '>Włączone</option><option value="0"' + (db.s.auto ? '' : ' selected') + '>Wyłączone</option></select>';
-  h += '<p class="mute">Lepsze głosy pobierzesz na iPhonie w: Ustawienia → Dostępność → Treści czytane na głos → Głosy.</p></div>';
+  h += '<button class="btn sec" data-act="revoices" style="margin-top:12px">Odśwież listę głosów</button>';
+  h += '<p class="mute">Lepsze głosy pobierzesz na iPhonie w: Ustawienia → Dostępność → Treści czytane na głos → Głosy. Safari nie zawsze pokazuje wszystkie pobrane głosy; po pobraniu zamknij Safari całkiem lub uruchom telefon ponownie.</p></div>';
   h += '<div class="card"><h2>Kopia postępów</h2><p class="mute">Postępy są zapisane na tym urządzeniu. Aby przenieść je na inne urządzenie, skopiuj kod i wklej go tam.</p>' +
     '<button class="btn sec" data-act="export">Pokaż kod do skopiowania</button><textarea id="xfer" placeholder="Tutaj pojawi się kod lub wklej kod z innego urządzenia"></textarea><div style="height:10px"></div>' +
     '<button class="btn sec" data-act="copy">Kopiuj</button><button class="btn blue" data-act="import">Wczytaj postępy z kodu</button></div>';
@@ -615,6 +623,7 @@ document.addEventListener('click', function (e) {
   var a = el.getAttribute('data-act'), c = el.getAttribute('data-c');
   if (el.tagName === 'SELECT') return;
   switch (a) {
+    case 'revoices': loadVoices(); return render();
     case 'story': curK = 'c'; return go({ name: 'story', c: c, id: el.getAttribute('data-id'), page: 0 });
     case 'rplay': if (RD.playing) stopRead(); else startRead(0); return;
     case 'rslow': RD.slow = !RD.slow; el.classList.toggle('on', RD.slow); return;
