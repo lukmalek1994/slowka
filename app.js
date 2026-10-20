@@ -310,7 +310,6 @@ function vStory() {
   if (!st) return '<button class="back" data-act="course" data-c="' + c + '">‹ Czytanki</button><p>Nie znaleziono historii.</p>';
   var last = pg === st.pages.length - 1;
   var h = '<div class="top"><button class="back" data-act="course" data-c="' + c + '">‹ Czytanki</button><span class="mute">Strona ' + (pg + 1) + ' / ' + st.pages.length + '</span></div><h1 style="font-size:22px">' + esc(st.title) + '</h1>';
-  h += '<div class="rtool"><button class="btn" id="rplay" data-act="rplay" style="margin:0;flex:1">▶ Czytaj stronę</button><button class="icon' + (RD.slow ? ' on' : '') + '" data-act="rslow" id="rslow">🐢</button></div>';
   h += '<div class="card reader">';
   st.pages[pg].forEach(function (p, pi) {
     h += '<div class="para">' + splitSentences(p.t).map(function (s, si) { return '<span class="snt" data-i="' + pi + '-' + si + '">' + sentenceHtml(c, s) + '</span>'; }).join('') + '</div>';
@@ -318,10 +317,12 @@ function vStory() {
   });
   h += '</div><div class="row2" style="margin-top:6px">' + (pg ? '<button class="btn sec" data-act="rpage" data-d="-1" style="flex:1;margin:0">‹ Wstecz</button>' : '') +
     (last ? '<button class="btn" data-act="rdone" style="flex:1;margin:0">Zakończ ✓</button>' : '<button class="btn" data-act="rpage" data-d="1" style="flex:1;margin:0">Dalej ›</button>') + '</div>';
+  h += '<div style="height:96px"></div><div class="rtool"><button class="btn" id="rplay" data-act="rplay" style="margin:0;flex:1">▶ Czytaj stronę</button><button class="icon' + (RD.slow ? ' on' : '') + '" data-act="rslow" id="rslow">🐢</button></div>';
   return h;
 }
 function setPlayBtn() {
-  var b = document.getElementById('rplay'); if (b) b.textContent = RD.playing ? '⏹ Stop' : '▶ Czytaj stronę';
+  var b = document.getElementById('rplay');
+  if (b) { b.textContent = RD.playing ? '⏹ Stop' : '▶ Czytaj stronę'; b.classList.toggle('stopping', RD.playing); }
 }
 function clearHL() { [].forEach.call(document.querySelectorAll('.snt.on'), function (e) { e.classList.remove('on'); }); }
 function stopRead() {
