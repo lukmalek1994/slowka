@@ -26,7 +26,7 @@ function loadDb() {
   if (!d || typeof d !== 'object') d = {};
   d.p = d.p || {};
   d.days = d.days || {};
-  d.s = Object.assign({ rate: 0.9, auto: true, ves: '', ven: '', vit: '' }, d.s || {});
+  d.s = Object.assign({ rate: 0.9, vol: 1, loud: true, auto: true, ves: '', ven: '', vit: '' }, d.s || {});
   if (d.s.vEs && !d.s.ves) d.s.ves = d.s.vEs;
   if (d.s.vEn && !d.s.ven) d.s.ven = d.s.vEn;
   return d;
@@ -39,13 +39,41 @@ function words(c) {
     var seen = {};
     cache[c] = COURSES[c].raw().filter(function (r) {
       if (!r || !r[0] || seen[r[0]]) return false; seen[r[0]] = 1; return true;
-    }).slice(0, COURSES[c].max || 9999).map(function (r, i) { return { id: c + ':' + r[0], c: c, w: r[0], p: r[1], ex: r[2] || '', tr: r[3] || '', i: i }; });
+    }).slice(0, COURSES[c].max || 9999).map(function (r, i) { return { id: c + ':' + r[0], c: c, w: r[0], p: r[1], ex: r[2] || '', tr: r[3] || '', k: 'w', i: i }; });
   }
   return cache[c];
 }
+var pcache = {};
+function phrases(c) {
+  if (!pcache[c]) {
+    var seen = {};
+    pcache[c] = (window['PH_' + c.toUpperCase()] || []).filter(function (r) {
+      if (!r || !r[0] || seen[r[0]]) return false; seen[r[0]] = 1; return true;
+    }).map(function (r, i) { return { id: 'p:' + c + ':' + r[0], c: c, k: 'p', w: r[0], p: r[1], theme: r[2] || '', note: r[3] || '', ex: r[4] || '', tr: r[5] || '', i: i }; });
+  }
+  return pcache[c];
+}
+function items(c, k) { return k === 'p' ? phrases(c) : words(c); }
+function groups(c, k) {
+  var list = items(c, k), out = [];
+  if (k === 'p') {
+    list.forEach(function (w) {
+      var g = out[out.length - 1];
+      if (!g || g.label !== w.theme) { g = { label: w.theme || 'Zwroty', list: [] }; out.push(g); }
+      g.list.push(w);
+    });
+  } else {
+    for (var g = 0; g * GROUP < list.length; g++) {
+      var part = list.slice(g * GROUP, (g + 1) * GROUP);
+      out.push({ label: 'Zestaw ' + (g + 1), sub: (g * GROUP + 1) + '–' + (g * GROUP + part.length), list: part });
+    }
+  }
+  return out;
+}
+var curK = 'w'; // aktywna zakładka: w = słówka, p = zwroty
 function isHard(r) { return r.l >= 2 && r.b <= 4; }
-function stats(c) {
-  var ws = words(c), now = Date.now(), s = { total: ws.length, learned: 0, due: 0, hard: 0, mastered: 0 };
+function stats(c, k) {
+  var ws = items(c, k || 'w'), now = Date.now(), s = { total: ws.length, learned: 0, due: 0, hard: 0, mastered: 0 };
   ws.forEach(function (w) {
     var r = db.p[w.id]; if (!r) return;
     s.learned++; if (r.d <= now) s.due++; if (r.b >= 5) s.mastered++; if (isHard(r)) s.hard++;
@@ -85,13 +113,37 @@ function voiceFor(c) {
   return list[0] || null;
 }
 function clean(t) { return String(t).replace(/\(.*?\)/g, ' ').replace(/\//g, ' ').replace(/\s+/g, ' ').trim(); }
+// iOS: cichy dźwięk w tle przełącza sesję audio na „odtwarzanie”, dzięki czemu mowa bywa słyszalna mimo trybu cichego
+var silent = null;
+function makeSilent() {
+  var n = 8000, buf = new ArrayBuffer(44 + n), v = new DataView(buf), i;
+  function s(o, t) { for (var j = 0; j < t.length; j++) v.setUint8(o + j, t.charCodeAt(j)); }
+  s(0, 'RIFF'); v.setUint32(4, 36 + n, true); s(8, 'WAVE'); s(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true); v.setUint32(24, 8000, true); v.setUint32(28, 8000, true); v.setUint16(32, 1, true); v.setUint16(34, 8, true);
+  s(36, 'data'); v.setUint32(40, n, true);
+  for (i = 0; i < n; i++) v.setUint8(44 + i, 128);
+  var a = new Audio(URL.createObjectURL(new Blob([buf], { type: 'audio/wav' })));
+  a.loop = true; return a;
+}
+function ensurePlayback() {
+  if (!db.s.loud) return;
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
+  try {
+    if (!silent) silent = makeSilent();
+    if (silent.paused) { var p = silent.play(); if (p && p.catch) p.catch(function () {}); }
+  } catch (e) {}
+}
+document.addEventListener('visibilitychange', function () { if (document.hidden && silent) { try { silent.pause(); } catch (e) {} } });
+
 function speak(text, c, slow) {
   if (!hasTTS) return;
+  ensurePlayback();
   try {
     var u = new SpeechSynthesisUtterance(clean(text));
     u.lang = COURSES[c].lang;
     var v = voiceFor(c); if (v) u.voice = v;
     u.rate = slow ? 0.55 : db.s.rate;
+    u.volume = typeof db.s.vol === 'number' ? db.s.vol : 1;
     speechSynthesis.cancel();
     speechSynthesis.speak(u);
   } catch (e) {}
@@ -141,61 +193,71 @@ function vHome() {
     (st ? '<span class="streak">🔥 ' + st + ' ' + plural(st, 'dzień', 'dni', 'dni') + '</span>' : '') +
     '<button class="icon" data-act="settings" aria-label="Ustawienia">⚙️</button></div>';
   Object.keys(COURSES).forEach(function (c) {
-    var s = stats(c), co = COURSES[c];
+    var s = stats(c, 'w'), ps = stats(c, 'p'), co = COURSES[c], due = s.due + ps.due, hard = s.hard + ps.hard;
     h += '<button class="card course" data-act="course" data-c="' + c + '"><div class="row"><div class="flag">' + co.flag + '</div>' +
       '<div><h2>' + co.name + '</h2><div class="mute">' + co.sub + '</div></div></div>' +
-      '<div class="bar"><i style="width:' + pct(s.learned, s.total) + '%"></i></div><div class="chips">' +
-      '<span class="chip">Poznane ' + s.learned + ' / ' + s.total + '</span>' +
-      (s.due ? '<span class="chip hot">Do powtórki: ' + s.due + '</span>' : '') +
-      (s.hard ? '<span class="chip hot">Trudne: ' + s.hard + '</span>' : '') + '</div></button>';
+      '<div class="bar"><i style="width:' + pct(s.learned + ps.learned, s.total + ps.total) + '%"></i></div><div class="chips">' +
+      '<span class="chip">Słówka ' + s.learned + ' / ' + s.total + '</span>' +
+      (ps.total ? '<span class="chip">Zwroty ' + ps.learned + ' / ' + ps.total + '</span>' : '') +
+      (due ? '<span class="chip hot">Do powtórki: ' + due + '</span>' : '') +
+      (hard ? '<span class="chip hot">Trudne: ' + hard + '</span>' : '') + '</div></button>';
   });
   return h;
 }
 
 function vCourse() {
-  var c = view.c, co = COURSES[c], s = stats(c), fresh = s.total - s.learned;
+  var c = view.c, co = COURSES[c], k = curK, isP = k === 'p', s = stats(c, k), fresh = s.total - s.learned;
   var h = '<button class="back" data-act="home">‹ Kursy</button><div class="top"><div class="grow"><h1>' + co.flag + ' ' + co.name + '</h1><div class="mute">' + co.sub + '</div></div></div>';
+  h += '<div class="tabs"><button class="tab' + (isP ? '' : ' on') + '" data-act="tab" data-k="w" data-c="' + c + '">Słówka</button><button class="tab' + (isP ? ' on' : '') + '" data-act="tab" data-k="p" data-c="' + c + '">Zwroty</button></div>';
   h += '<div class="card"><div class="bar"><i style="width:' + pct(s.learned, s.total) + '%"></i></div><div class="chips">' +
     '<span class="chip">Poznane ' + s.learned + ' / ' + s.total + '</span><span class="chip">Opanowane ' + s.mastered + '</span></div></div>';
-  h += '<button class="btn" data-act="learn" data-c="' + c + '"' + (fresh ? '' : ' disabled') + '>Ucz się nowych słów<small>' + (fresh ? 'Kolejne 10 słówek' : 'Wszystko poznane!') + '</small></button>';
-  h += '<button class="btn blue" data-act="review" data-c="' + c + '"' + (s.due ? '' : ' disabled') + '>Powtórka<small>' + (s.due ? s.due + ' ' + plural(s.due, 'słówko czeka', 'słówka czekają', 'słówek czeka') : 'Nic na dziś') + '</small></button>';
-  h += '<button class="btn sec" data-act="hard" data-c="' + c + '"' + (s.hard ? '' : ' disabled') + '>Trudne słówka<small>' + (s.hard ? s.hard + ' do przećwiczenia' : 'Brak trudnych słówek') + '</small></button>';
-  h += '<button class="btn sec" data-act="lessons" data-c="' + c + '">Lista słówek<small>Kliknij słowo, aby usłyszeć wymowę</small></button>';
+  h += '<button class="btn" data-act="learn" data-c="' + c + '"' + (fresh ? '' : ' disabled') + '>' + (isP ? 'Ucz się nowych zwrotów' : 'Ucz się nowych słów') + '<small>' + (fresh ? 'Kolejne ' + (isP ? 8 : 10) + (isP ? ' zwrotów' : ' słówek') : (s.total ? 'Wszystko poznane!' : 'Brak treści')) + '</small></button>';
+  h += '<button class="btn blue" data-act="review" data-c="' + c + '"' + (s.due ? '' : ' disabled') + '>Powtórka<small>' + (s.due ? s.due + ' ' + (isP ? plural(s.due, 'zwrot czeka', 'zwroty czekają', 'zwrotów czeka') : plural(s.due, 'słówko czeka', 'słówka czekają', 'słówek czeka')) : 'Nic na dziś') + '</small></button>';
+  h += '<button class="btn sec" data-act="hard" data-c="' + c + '"' + (s.hard ? '' : ' disabled') + '>' + (isP ? 'Trudne zwroty' : 'Trudne słówka') + '<small>' + (s.hard ? s.hard + ' do przećwiczenia' : (isP ? 'Brak trudnych zwrotów' : 'Brak trudnych słówek')) + '</small></button>';
+  h += '<button class="btn sec" data-act="lessons" data-c="' + c + '">' + (isP ? 'Zwroty według tematów' : 'Lista słówek') + '<small>Kliknij, aby usłyszeć wymowę</small></button>';
   return h;
 }
 
 function vLessons() {
-  var c = view.c, ws = words(c), h = '<button class="back" data-act="course" data-c="' + c + '">‹ ' + COURSES[c].name + '</button><h1>Lista słówek</h1><div class="card">';
-  for (var g = 0; g * GROUP < ws.length; g++) {
-    var part = ws.slice(g * GROUP, (g + 1) * GROUP), known = part.filter(function (w) { return db.p[w.id]; }).length;
-    h += '<button class="lesson" data-act="lesson" data-c="' + c + '" data-g="' + g + '"><div class="grow"><b>Zestaw ' + (g + 1) + '</b> <span class="mute">· ' + (g * GROUP + 1) + '–' + (g * GROUP + part.length) + '</span>' +
+  var c = view.c, gs = groups(c, curK), h = '<button class="back" data-act="course" data-c="' + c + '">‹ ' + COURSES[c].name + '</button><h1>' + (curK === 'p' ? 'Zwroty' : 'Lista słówek') + '</h1><div class="card">';
+  gs.forEach(function (gr, g) {
+    var part = gr.list, known = part.filter(function (w) { return db.p[w.id]; }).length;
+    h += '<button class="lesson" data-act="lesson" data-c="' + c + '" data-g="' + g + '"><div class="grow"><b>' + esc(gr.label) + '</b>' + (gr.sub ? ' <span class="mute">· ' + gr.sub + '</span>' : '') +
       '<div class="mini"><i style="width:' + pct(known, part.length) + '%"></i></div></div><span class="mute">' + known + '/' + part.length + '</span></button>';
-  }
+  });
   return h + '</div>';
 }
 
 function dotClass(r) { if (!r) return ''; if (isHard(r)) return 'hard'; return 'l' + Math.min(4, Math.max(1, Math.ceil(r.b * 4 / 6))); }
 
 function vLesson() {
-  var c = view.c, g = view.g, part = words(c).slice(g * GROUP, (g + 1) * GROUP);
-  var h = '<button class="back" data-act="lessons" data-c="' + c + '">‹ Lista</button><h1>Zestaw ' + (g + 1) + '</h1><div class="card">';
+  var c = view.c, gr = groups(c, curK)[view.g] || { label: '', list: [] }, part = gr.list;
+  var h = '<button class="back" data-act="lessons" data-c="' + c + '">‹ Lista</button><h1>' + esc(gr.label) + '</h1><div class="card">';
   part.forEach(function (w) {
     h += '<div class="wrow" data-act="word" data-id="' + esc(w.id) + '"><button class="spk sm" aria-label="Odtwórz">🔊</button><div class="grow" style="flex:1"><div class="w">' + esc(w.w) + '</div><div class="t">' + esc(w.p) + '</div></div><span class="dot ' + dotClass(db.p[w.id]) + '"></span></div>';
-    if (view.open === w.id && w.ex) h += '<div class="wex"><div data-act="say-ex" data-id="' + esc(w.id) + '">' + esc(w.ex) + ' 🔊</div>' + trBlock(w, view.trOpen === w.id, 'list') + '</div>';
+    if (view.open === w.id) h += '<div class="wex">' + (w.note ? '<div>' + esc(w.note) + '</div>' : '') + (w.ex ? '<div data-act="say-ex" data-id="' + esc(w.id) + '">' + esc(w.ex) + ' 🔊</div>' + trBlock(w, view.trOpen === w.id, 'list') : '') + '</div>';
   });
   return h + '</div>';
 }
 
 /* ---------- sesja ---------- */
-function wordById(id) { var c = id.slice(0, 2); return words(c).filter(function (w) { return w.id === id; })[0]; }
+function wordById(id) {
+  var p = id.indexOf('p:') === 0, c = p ? id.slice(2, 4) : id.slice(0, 2);
+  return items(c, p ? 'p' : 'w').filter(function (w) { return w.id === id; })[0];
+}
+function meta(w) {
+  if (w.k !== 'p') return '';
+  var t = [w.theme, w.note].filter(Boolean).map(esc).join(' · ');
+  return t ? '<div class="meta">' + t + '</div>' : '';
+}
 
 function startSession(c, mode) {
-  var ws = words(c), now = Date.now(), list = [];
-  if (mode === 'learn') list = ws.filter(function (w) { return !db.p[w.id]; }).slice(0, 10);
+  var k = curK, ws = items(c, k), now = Date.now(), list = [];
+  if (mode === 'learn') list = ws.filter(function (w) { return !db.p[w.id]; }).slice(0, k === 'p' ? 8 : 10);
   else if (mode === 'review') list = ws.filter(function (w) { var r = db.p[w.id]; return r && r.d <= now; }).sort(function (a, b) { return db.p[a.id].d - db.p[b.id].d; }).slice(0, 20);
   else list = shuffle(ws.filter(function (w) { var r = db.p[w.id]; return r && isHard(r); })).slice(0, 15);
   if (!list.length) return go({ name: 'course', c: c });
-  S = { c: c, mode: mode, words: list, queue: [], done: 0, ok: 0, bad: 0, intro: mode === 'learn' ? list.slice() : [], ii: 0, q: null };
+  S = { c: c, k: k, mode: mode, words: list, queue: [], done: 0, ok: 0, bad: 0, intro: mode === 'learn' ? list.slice() : [], ii: 0, q: null };
   if (S.intro.length) { go({ name: 'intro' }); speakIntro(); }
   else beginQuiz();
 }
@@ -209,7 +271,7 @@ function vIntro() {
   var w = S.intro[S.ii];
   return '<div class="top"><button class="back" data-act="quit">✕ Zamknij</button><div class="sbar"><i style="width:' + pct(S.ii, S.intro.length) + '%"></i></div><span class="mute">' + (S.ii + 1) + '/' + S.intro.length + '</span></div>' +
     '<div class="card stage"><button class="spk" data-act="say" data-t="' + esc(w.w) + '" aria-label="Odtwórz">🔊</button>' +
-    '<div class="big">' + esc(w.w) + '</div><div class="trans">' + esc(w.p) + '</div>' +
+    '<div class="big' + (w.k === 'p' ? ' ph' : '') + '">' + esc(w.w) + '</div><div class="trans">' + esc(w.p) + '</div>' + meta(w) +
     (w.ex ? '<div class="ex" data-act="say" data-t="' + esc(w.ex) + '">' + esc(w.ex) + ' 🔊</div>' + trBlock(w, S.trOpen, 'intro') : '') + '</div>' +
     '<button class="btn sec" data-act="slow" data-t="' + esc(w.w) + '">🐢 Wolniej</button>' +
     '<button class="btn" data-act="introNext">' + (S.ii + 1 < S.intro.length ? 'Dalej' : 'Zaczynamy ćwiczenia') + '</button>';
@@ -223,21 +285,31 @@ function pickType(q) {
   else if (b === 2) opts = ['c1', 'c2'];
   else if (b === 3) opts = ['c2', 'listen'];
   else opts = ['listen', 'type'];
+  if (S.k === 'p') opts = opts.map(function (o) { return o === 'listen' ? 'lc' : o === 'type' ? 'order' : o; });
   return opts[Math.floor(Math.random() * opts.length)];
 }
 function makeOptions(q) {
-  var pool = words(S.c).filter(function (w) { return w.id !== q.w.id; });
-  var others = shuffle(pool).slice(0, 3);
-  var key = q.type === 'c1' ? 'p' : 'w';
-  var arr = shuffle(others.concat([q.w])).map(function (w) { return { t: w[key], ok: w.id === q.w.id }; });
-  return arr;
+  var key = (q.type === 'c1' || q.type === 'lc') ? 'p' : 'w';
+  var pool = shuffle(items(S.c, S.k).filter(function (w) { return w.id !== q.w.id && w[key] !== q.w[key]; }));
+  if (S.k === 'p') pool = pool.filter(function (w) { return w.theme === q.w.theme; }).concat(pool.filter(function (w) { return w.theme !== q.w.theme; }));
+  var others = [], seen = {};
+  pool.forEach(function (w) { if (others.length < 3 && !seen[w[key]]) { seen[w[key]] = 1; others.push(w); } });
+  return shuffle(others.concat([q.w])).map(function (w) { return { t: w[key], ok: w.id === q.w.id }; });
 }
+function tokensOf(w) { return w.w.split(/\s+/).filter(Boolean); }
 function nextQ() {
   if (!S.queue.length) return go({ name: 'summary' });
   var q = S.queue[0];
   q.type = pickType(q);
+  if (q.type === 'order' && tokensOf(q.w).length < 3) q.type = 'c2';
   q.state = null; q.trOpen = false;
-  if (q.type === 'c1' || q.type === 'c2') q.options = makeOptions(q);
+  if (q.type === 'order') {
+    var n = tokensOf(q.w).length, idx = [], tries = 0;
+    for (var t = 0; t < n; t++) idx.push(t);
+    do { q.deck = shuffle(idx); tries++; } while (tries < 8 && q.deck.join() === idx.join());
+    q.built = [];
+  }
+  if (q.type === 'c1' || q.type === 'c2' || q.type === 'lc') q.options = makeOptions(q);
   S.q = q;
   go({ name: 'quiz' });
 }
@@ -246,10 +318,21 @@ function head() {
 }
 function vQuiz() {
   var q = S.q, w = q.w, st = q.state, h = head();
-  if (q.type === 'c1' || q.type === 'c2') {
+  var cls0 = w.k === 'p' ? 'big ph' : 'big';
+  if (q.type === 'order') {
+    var toks = tokensOf(w);
+    h += '<div class="card stage"><div class="' + cls0 + '">' + esc(w.p) + '</div><div class="mute" style="margin-top:6px">Ułóż zwrot po: ' + COURSES[S.c].name + '</div></div><div class="built' + (st ? (st.ok ? ' ok' : ' bad') : '') + '">';
+    q.built.forEach(function (ti, pos) { h += '<button class="tok on"' + (st ? ' disabled' : ' data-act="tdel" data-i="' + pos + '"') + '>' + esc(toks[ti]) + '</button>'; });
+    h += '</div><div class="deck">';
+    q.deck.forEach(function (ti) { if (q.built.indexOf(ti) < 0) h += '<button class="tok"' + (st ? ' disabled' : ' data-act="tadd" data-i="' + ti + '"') + '>' + esc(toks[ti]) + '</button>'; });
+    h += '</div>';
+    if (!st) h += '<button class="btn" data-act="ocheck"' + (q.built.length === toks.length ? '' : ' disabled') + '>Sprawdź</button><button class="btn sec" data-act="idk">Nie wiem</button>';
+  } else if (q.type === 'c1' || q.type === 'c2' || q.type === 'lc') {
     var prompt = q.type === 'c1'
-      ? '<button class="spk" data-act="say" data-t="' + esc(w.w) + '">🔊</button><div class="big">' + esc(w.w) + '</div><div class="mute" style="margin-top:6px">Wybierz tłumaczenie</div>'
-      : '<div class="big">' + esc(w.p) + '</div><div class="mute" style="margin-top:6px">Wybierz słowo w języku: ' + COURSES[S.c].name + '</div>';
+      ? '<button class="spk" data-act="say" data-t="' + esc(w.w) + '">🔊</button><div class="' + cls0 + '">' + esc(w.w) + '</div><div class="mute" style="margin-top:6px">Wybierz tłumaczenie</div>'
+      : q.type === 'lc'
+      ? '<button class="spk" data-act="say" data-t="' + esc(w.w) + '">🔊</button><div class="mute">Posłuchaj i wybierz tłumaczenie</div><button class="icon" style="margin-top:10px" data-act="slow" data-t="' + esc(w.w) + '">🐢 Wolniej</button>'
+      : '<div class="' + cls0 + '">' + esc(w.p) + '</div><div class="mute" style="margin-top:6px">Wybierz ' + (w.k === 'p' ? 'zwrot' : 'słowo') + ' w języku: ' + COURSES[S.c].name + '</div>';
     h += '<div class="card stage">' + prompt + '</div><div class="opts">';
     q.options.forEach(function (o, i) {
       var cls = '';
@@ -266,7 +349,7 @@ function vQuiz() {
     if (!st) h += '<button class="btn" data-act="check">Sprawdź</button><button class="btn sec" data-act="idk">Nie wiem</button>';
   }
   if (st) {
-    h += '<div class="fb ' + (st.ok ? 'ok' : 'bad') + '">' + (st.ok ? '✓ Dobrze! ' : '✗ Poprawnie: ') + '<b>' + esc(w.w) + '</b> — ' + esc(w.p) +
+    h += '<div class="fb ' + (st.ok ? 'ok' : 'bad') + '">' + (st.ok ? '✓ Dobrze! ' : '✗ Poprawnie: ') + '<b>' + esc(w.w) + '</b> — ' + esc(w.p) + meta(w) +
       (st.note ? '<div style="margin-top:4px">' + esc(st.note) + '</div>' : '') +
       (w.ex ? '<div style="margin-top:8px;cursor:pointer" data-act="say" data-t="' + esc(w.ex) + '">' + esc(w.ex) + ' 🔊</div>' + trBlock(w, q.trOpen, 'quiz') : '') + '</div>';
     h += '<button class="btn" data-act="next">Dalej</button>';
@@ -277,7 +360,7 @@ function afterQuiz() {
   var q = S.q, inp = document.getElementById('ans');
   if (!q.state) {
     if (q.type === 'c1' && db.s.auto) speak(q.w.w, S.c);
-    if (q.type === 'listen') speak(q.w.w, S.c);
+    if (q.type === 'listen' || q.type === 'lc') speak(q.w.w, S.c);
     if (inp) { try { inp.focus(); } catch (e) {} }
   }
 }
@@ -316,8 +399,8 @@ function advance() {
 
 function vSummary() {
   var total = S.ok + S.bad, acc = pct(S.ok, total), icon = acc >= 80 ? '🎉' : acc >= 50 ? '👍' : '💪';
-  var s = stats(S.c);
-  return '<div class="card stage"><div class="sum">' + icon + '</div><h1>Sesja zakończona</h1><div class="mute">' + S.words.length + ' ' + plural(S.words.length, 'słówko', 'słówka', 'słówek') + '</div>' +
+  var s = stats(S.c, S.k);
+  return '<div class="card stage"><div class="sum">' + icon + '</div><h1>Sesja zakończona</h1><div class="mute">' + S.words.length + ' ' + (S.k === 'p' ? plural(S.words.length, 'zwrot', 'zwroty', 'zwrotów') : plural(S.words.length, 'słówko', 'słówka', 'słówek')) + '</div>' +
     '<div class="statg"><div><b>' + acc + '%</b>trafnych odpowiedzi</div><div><b>' + S.bad + '</b>pomyłek</div><div><b>' + s.learned + '</b>poznanych razem</div><div><b>' + s.due + '</b>do powtórki</div></div></div>' +
     '<button class="btn" data-act="course" data-c="' + S.c + '">Gotowe</button>';
 }
@@ -333,6 +416,9 @@ function vSettings() {
   var h = '<button class="back" data-act="home">‹ Wróć</button><h1>Ustawienia</h1><div class="card"><h2>Głos</h2>';
   if (!hasTTS) h += '<p class="mute">Ta przeglądarka nie obsługuje syntezy mowy.</p>';
   h += voiceSelect('es', 'Hiszpański') + voiceSelect('it', 'Włoski') + voiceSelect('en', 'Angielski');
+  h += '<label>Głośność wymowy: <span id="volv">' + Math.round(db.s.vol * 100) + '%</span></label><div class="row2"><input type="range" id="vol" min="0" max="100" step="5" value="' + Math.round(db.s.vol * 100) + '" style="flex:1"><button class="icon" data-act="say" data-t="Hola, hello, ciao" data-c="es">🔊</button></div>';
+  h += '<label>Odtwarzaj mimo trybu cichego</label><select data-act="loud"><option value="1"' + (db.s.loud ? ' selected' : '') + '>Włączone</option><option value="0"' + (db.s.loud ? '' : ' selected') + '>Wyłączone</option></select>';
+  h += '<p class="mute">Jeśli nadal nic nie słychać, sprawdź przełącznik dzwonka z boku iPhone\'a i głośność multimediów (przyciski głośności).</p>';
   h += '<label>Tempo wymowy</label><select data-act="rate">' + [[0.7, 'Wolno'], [0.9, 'Normalnie'], [1.05, 'Szybko']].map(function (o) { return '<option value="' + o[0] + '"' + (db.s.rate === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select>';
   h += '<label>Automatyczne odtwarzanie</label><select data-act="auto"><option value="1"' + (db.s.auto ? ' selected' : '') + '>Włączone</option><option value="0"' + (db.s.auto ? '' : ' selected') + '>Wyłączone</option></select>';
   h += '<p class="mute">Lepsze głosy pobierzesz na iPhonie w: Ustawienia → Dostępność → Treści czytane na głos → Głosy.</p></div>';
@@ -353,6 +439,15 @@ function checkTyped() {
   answer(ok, v, note); render();
 }
 
+function checkOrder() {
+  var q = S.q;
+  if (q.state) return;
+  var toks = tokensOf(q.w);
+  if (q.built.length !== toks.length) return;
+  var got = q.built.map(function (i) { return toks[i]; }).join(' ');
+  answer(norm(got) === norm(q.w.w), got, ''); render();
+}
+
 document.addEventListener('click', function (e) {
   var el = e.target.closest('[data-act]'); if (!el) return;
   var a = el.getAttribute('data-act'), c = el.getAttribute('data-c');
@@ -361,6 +456,10 @@ document.addEventListener('click', function (e) {
     case 'home': S = null; return go({ name: 'home' });
     case 'settings': return go({ name: 'settings' });
     case 'course': return go({ name: 'course', c: c });
+    case 'tab': curK = el.getAttribute('data-k'); return go({ name: 'course', c: c });
+    case 'tadd': { var qa = S.q; if (qa.state) return; qa.built.push(+el.getAttribute('data-i')); return render(); }
+    case 'tdel': { var qd = S.q; if (qd.state) return; qd.built.splice(+el.getAttribute('data-i'), 1); return render(); }
+    case 'ocheck': return checkOrder();
     case 'learn': return startSession(c, 'learn');
     case 'review': return startSession(c, 'review');
     case 'hard': return startSession(c, 'hard');
@@ -414,7 +513,7 @@ document.addEventListener('click', function (e) {
       return;
   }
 });
-function loadDbFix() { db.p = db.p || {}; db.days = db.days || {}; db.s = Object.assign({ rate: 0.9, auto: true, ves: '', ven: '', vit: '' }, db.s || {}); }
+function loadDbFix() { db.p = db.p || {}; db.days = db.days || {}; db.s = Object.assign({ rate: 0.9, vol: 1, loud: true, auto: true, ves: '', ven: '', vit: '' }, db.s || {}); }
 
 document.addEventListener('change', function (e) {
   var el = e.target; if (el.tagName !== 'SELECT') return;
@@ -422,16 +521,24 @@ document.addEventListener('change', function (e) {
   if (a === 'voice') db.s['v' + el.getAttribute('data-c')] = el.value;
   else if (a === 'rate') db.s.rate = parseFloat(el.value);
   else if (a === 'auto') db.s.auto = el.value === '1';
+  else if (a === 'loud') db.s.loud = el.value === '1';
+  save();
+});
+document.addEventListener('input', function (e) {
+  if (e.target.id !== 'vol') return;
+  db.s.vol = e.target.value / 100;
+  var l = document.getElementById('volv'); if (l) l.textContent = e.target.value + '%';
   save();
 });
 document.addEventListener('keydown', function (e) {
   if (e.key !== 'Enter' || view.name !== 'quiz' || !S) return;
   if (e.target.tagName === 'TEXTAREA') return;
-  if (S.q.state) advance(); else checkTyped();
+  if (S.q.state) advance(); else if (S.q.type === 'order') checkOrder(); else checkTyped();
 });
 // iOS: pierwsze dotknięcie odblokowuje syntezę mowy
 document.addEventListener('touchstart', function unlock() {
   document.removeEventListener('touchstart', unlock);
+  ensurePlayback();
   if (hasTTS) { try { var u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); } catch (e) {} }
 }, { passive: true });
 
