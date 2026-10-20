@@ -384,7 +384,7 @@ function vCat() {
 }
 
 function vLessons() {
-  var c = view.c, gs = groups(c, curK), h = '<button class="back" data-act="course" data-c="' + c + '">‹ ' + COURSES[c].name + '</button><h1>' + (curK === 'p' ? 'Zwroty' : 'Lista słówek') + '</h1><div class="card">';
+  var c = view.c, gs = groups(c, curK), h = '<button class="back" data-act="course" data-c="' + c + '">‹ ' + COURSES[c].flag + ' ' + COURSES[c].name + '</button><h1>' + (curK === 'p' ? 'Zwroty' : 'Lista słówek') + '</h1><div class="card">';
   gs.forEach(function (gr, g) {
     var part = gr.list, known = part.filter(function (w) { return db.p[w.id]; }).length;
     h += '<button class="lesson" data-act="lesson" data-c="' + c + '" data-g="' + g + '"><div class="grow"><b>' + esc(gr.label) + '</b>' + (gr.sub ? ' <span class="mute">· ' + gr.sub + '</span>' : '') +
@@ -498,7 +498,7 @@ function vQuiz() {
       ? '<button class="spk" data-act="say" data-t="' + esc(w.w) + '">🔊</button><div class="' + cls0 + '">' + esc(w.w) + '</div><div class="mute" style="margin-top:6px">Wybierz tłumaczenie</div>'
       : q.type === 'lc'
       ? '<button class="spk" data-act="say" data-t="' + esc(w.w) + '">🔊</button><div class="mute">Posłuchaj i wybierz tłumaczenie</div><button class="icon" style="margin-top:10px" data-act="slow" data-t="' + esc(w.w) + '">🐢 Wolniej</button>'
-      : '<div class="' + cls0 + '">' + esc(w.p) + '</div><div class="mute" style="margin-top:6px">Wybierz ' + (w.k === 'p' ? 'zwrot' : 'słowo') + ' w języku: ' + COURSES[S.c].name + '</div>';
+      : '<div class="' + cls0 + '">' + esc(w.p) + '</div><div class="mute" style="margin-top:6px">Wybierz ' + (w.k === 'p' ? 'zwrot' : 'słowo') + ' w języku: ' + COURSES[S.c].flag + ' ' + COURSES[S.c].name + '</div>';
     h += '<div class="card stage">' + prompt + '</div><div class="opts">';
     q.options.forEach(function (o, i) {
       var cls = '';
@@ -510,7 +510,7 @@ function vQuiz() {
     var listen = q.type === 'listen';
     h += '<div class="card stage">' + (listen
       ? '<button class="spk" data-act="say" data-t="' + esc(w.w) + '">🔊</button><div class="mute">Wpisz to, co słyszysz</div><button class="icon" style="margin-top:10px" data-act="slow" data-t="' + esc(w.w) + '">🐢 Wolniej</button>'
-      : '<div class="big">' + esc(w.p) + '</div><div class="mute" style="margin-top:6px">Wpisz po: ' + COURSES[S.c].name + '</div>') + '</div>';
+      : '<div class="big">' + esc(w.p) + '</div><div class="mute" style="margin-top:6px">Wpisz po: ' + COURSES[S.c].flag + ' ' + COURSES[S.c].name + '</div>') + '</div>';
     h += '<input class="inp' + (st ? (st.ok ? ' ok' : ' bad') : '') + '" id="ans" type="text" autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false" value="' + (st ? esc(st.text) : '') + '"' + (st ? ' readonly' : '') + ' placeholder="…">';
     if (!st) h += '<button class="btn" data-act="check">Sprawdź</button><button class="btn sec" data-act="idk">Nie wiem</button>';
   }
@@ -583,7 +583,7 @@ function voiceSelect(c, label) {
 function vSettings() {
   var h = '<button class="back" data-act="home">‹ Wróć</button><h1>Ustawienia</h1><div class="card"><h2>Głos</h2>';
   if (!hasTTS) h += '<p class="mute">Ta przeglądarka nie obsługuje syntezy mowy.</p>';
-  h += voiceSelect('es', 'Hiszpański') + voiceSelect('it', 'Włoski') + voiceSelect('en', 'Angielski');
+  h += voiceSelect('es', '🇪🇸 Hiszpański') + voiceSelect('it', '🇮🇹 Włoski') + voiceSelect('en', '🇺🇸 Angielski');
   h += '<label>Głośność wymowy: <span id="volv">' + Math.round(db.s.vol * 100) + '%</span></label><div class="row2"><input type="range" id="vol" min="0" max="100" step="5" value="' + Math.round(db.s.vol * 100) + '" style="flex:1"><button class="icon" data-act="say" data-t="Hola, hello, ciao" data-c="es">🔊</button></div>';
   h += '<label>Odtwarzaj mimo trybu cichego</label><select data-act="loud"><option value="1"' + (db.s.loud ? ' selected' : '') + '>Włączone</option><option value="0"' + (db.s.loud ? '' : ' selected') + '>Wyłączone</option></select>';
   h += '<p class="mute">Jeśli nadal nic nie słychać, sprawdź przełącznik dzwonka z boku iPhone\'a i głośność multimediów (przyciski głośności).</p>';
