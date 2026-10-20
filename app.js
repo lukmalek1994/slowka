@@ -28,7 +28,10 @@ function loadDb() {
   d.days = d.days || {};
   d.rw = d.rw || {};
   d.read = d.read || {};
-  d.s = Object.assign({ rate: 0.9, vol: 1, loud: true, auto: true, ves: '', ven: '', vit: '' }, d.s || {});
+  d.st = d.st || {};
+  d.badges = d.badges || {};
+  d.best = d.best || {};
+  d.s = Object.assign({ rate: 0.9, vol: 1, loud: true, auto: true, goal: 30, gapType: 'choice', ves: '', ven: '', vit: '' }, d.s || {});
   if (d.s.vEs && !d.s.ves) d.s.ves = d.s.vEs;
   if (d.s.vEn && !d.s.ven) d.s.ven = d.s.vEn;
   return d;
@@ -207,16 +210,19 @@ var $app = document.getElementById('app');
 var view = { name: 'home' };
 var S = null; // sesja nauki
 
+var APP = window.APP = window.APP || {};
 function go(v) {
   if (view && view.name === 'story' && v.name !== 'story') stopRead();
+  if (APP.leave) APP.leave(view, v);
   closeSheet();
   view = v; render(); window.scrollTo(0, 0);
 }
 
 function render() {
-  var fn = { home: vHome, course: vCourse, cat: vCat, story: vStory, myw: vMyw, lessons: vLessons, lesson: vLesson, intro: vIntro, quiz: vQuiz, summary: vSummary, settings: vSettings }[view.name] || vHome;
+  var fn = { home: vHome, course: vCourse, cat: vCat, story: vStory, myw: vMyw, lessons: vLessons, lesson: vLesson, intro: vIntro, quiz: vQuiz, summary: vSummary, settings: vSettings }[view.name] || (APP.views && APP.views[view.name]) || vHome;
   $app.innerHTML = fn();
   if (view.name === 'quiz') afterQuiz();
+  else if (APP.after) APP.after(view);
 }
 
 function vHome() {
@@ -224,6 +230,7 @@ function vHome() {
   var h = '<div class="top"><div class="grow"><h1>Słówka</h1><div class="mute">Wybierz kurs</div></div>' +
     (st ? '<span class="streak">🔥 ' + st + ' ' + plural(st, 'dzień', 'dni', 'dni') + '</span>' : '') +
     '<button class="icon" data-act="settings" aria-label="Ustawienia">⚙️</button></div>';
+  if (APP.homeTop) h += APP.homeTop();
   Object.keys(COURSES).forEach(function (c) {
     var s = stats(c, 'w'), ps = stats(c, 'p'), co = COURSES[c], due = s.due + ps.due, hard = s.hard + ps.hard;
     h += '<button class="card course" data-act="course" data-c="' + c + '"><div class="row"><div class="flag">' + co.flag + '</div>' +
@@ -241,6 +248,7 @@ function vHome() {
 function vCourse() {
   var c = view.c, co = COURSES[c], k = curK, isP = k === 'p', s = stats(c, k === 'c' ? 'w' : k), fresh = s.total - s.learned;
   var h = '<button class="back" data-act="home">‹ Kursy</button><div class="top"><div class="grow"><h1>' + co.flag + ' ' + co.name + '</h1><div class="mute">' + co.sub + '</div></div></div>';
+  if (APP.courseTop) h += APP.courseTop(c);
   h += '<div class="tabs">' + [['w', 'Słówka'], ['p', 'Zwroty'], ['c', 'Czytanki']].map(function (t) {
     return '<button class="tab' + (k === t[0] ? ' on' : '') + '" data-act="tab" data-k="' + t[0] + '" data-c="' + c + '">' + t[1] + '</button>';
   }).join('') + '</div>';
@@ -262,6 +270,7 @@ function vCourse() {
   h += '<button class="btn blue" data-act="review" data-c="' + c + '"' + (s.due ? '' : ' disabled') + '>Powtórka<small>' + (s.due ? s.due + ' ' + (isP ? plural(s.due, 'zwrot czeka', 'zwroty czekają', 'zwrotów czeka') : plural(s.due, 'słówko czeka', 'słówka czekają', 'słówek czeka')) : 'Nic na dziś') + '</small></button>';
   h += '<button class="btn sec" data-act="hard" data-c="' + c + '"' + (s.hard ? '' : ' disabled') + '>' + (isP ? 'Trudne zwroty' : 'Trudne słówka') + '<small>' + (s.hard ? s.hard + ' do przećwiczenia' : (isP ? 'Brak trudnych zwrotów' : 'Brak trudnych słówek')) + '</small></button>';
   h += '<button class="btn sec" data-act="lessons" data-c="' + c + '">' + (isP ? 'Zwroty według tematów' : 'Lista słówek') + '<small>Kliknij, aby usłyszeć wymowę</small></button>';
+  if (APP.courseExtras && !isP) h += APP.courseExtras(c);
   return h;
 }
 
@@ -466,6 +475,7 @@ function tokensOf(w) { return w.w.split(/\s+/).filter(Boolean); }
 function nextQ() {
   if (!S.queue.length) return go({ name: 'summary' });
   var q = S.queue[0];
+  S.c = q.w.c; S.k = q.w.k;
   q.type = pickType(q);
   if (q.type === 'order' && tokensOf(q.w).length < 3) q.type = 'c2';
   q.state = null; q.trOpen = false;
@@ -550,6 +560,7 @@ function answer(ok, text, note) {
     q.failed = true; q.need = 1;
   }
   save();
+  if (APP.onAnswer) APP.onAnswer(ok, w.c);
   speak(w.w, S.c);
 }
 function advance() {
@@ -563,8 +574,36 @@ function advance() {
   nextQ();
 }
 
+function startMix(onlyC) {
+  var now = Date.now(), list = [];
+  Object.keys(COURSES).forEach(function (c) {
+    if (onlyC && c !== onlyC) return;
+    ['w', 'p', 'r'].forEach(function (k) {
+      items(c, k).forEach(function (w) { var r = db.p[w.id]; if (r && r.d <= now) list.push(w); });
+    });
+  });
+  list.sort(function (a, b) { return db.p[a.id].d - db.p[b.id].d; });
+  list = list.slice(0, 20);
+  if (!list.length) return go({ name: 'home' });
+  S = { c: list[0].c, k: list[0].k, theme: null, mix: true, mixC: onlyC || null, mode: 'review', words: list, queue: [], done: 0, ok: 0, bad: 0, intro: [], ii: 0, q: null };
+  beginQuiz();
+}
+function mixCount(onlyC) {
+  var now = Date.now(), n = 0;
+  Object.keys(COURSES).forEach(function (c) {
+    if (onlyC && c !== onlyC) return;
+    ['w', 'p', 'r'].forEach(function (k) { items(c, k).forEach(function (w) { var r = db.p[w.id]; if (r && r.d <= now) n++; }); });
+  });
+  return n;
+}
 function vSummary() {
   var total = S.ok + S.bad, acc = pct(S.ok, total), icon = acc >= 80 ? '🎉' : acc >= 50 ? '👍' : '💪';
+  if (S.mix) {
+    var left = mixCount(S.mixC), mc = S.mixC ? ' data-c="' + S.mixC + '"' : '';
+    return '<div class="card stage"><div class="sum">' + icon + '</div><h1>Powtórka zakończona</h1><div class="mute">' + (S.mixC ? COURSES[S.mixC].flag + ' ' + COURSES[S.mixC].name + ' · ' : '') + S.words.length + ' pozycji</div>' +
+      '<div class="statg"><div><b>' + acc + '%</b>trafnych odpowiedzi</div><div><b>' + S.bad + '</b>pomyłek</div><div><b>' + left + '</b>jeszcze do powtórki</div><div><b>' + (APP.todayCorrect ? APP.todayCorrect() : 0) + '</b>poprawnych dziś</div></div></div>' +
+      (left ? '<button class="btn blue" data-act="mix"' + mc + '>Kolejna powtórka</button>' : '') + '<button class="btn" data-act="' + (S.mixC ? 'course' : 'home') + '"' + mc + '>Gotowe</button>';
+  }
   var s = stats(S.c, S.k);
   return '<div class="card stage"><div class="sum">' + icon + '</div><h1>Sesja zakończona</h1><div class="mute">' + S.words.length + ' ' + (S.k === 'p' ? plural(S.words.length, 'zwrot', 'zwroty', 'zwrotów') : plural(S.words.length, 'słówko', 'słówka', 'słówek')) + '</div>' +
     '<div class="statg"><div><b>' + acc + '%</b>trafnych odpowiedzi</div><div><b>' + S.bad + '</b>pomyłek</div><div><b>' + s.learned + '</b>poznanych razem</div><div><b>' + s.due + '</b>do powtórki</div></div></div>' +
@@ -591,6 +630,7 @@ function vSettings() {
   h += '<label>Automatyczne odtwarzanie</label><select data-act="auto"><option value="1"' + (db.s.auto ? ' selected' : '') + '>Włączone</option><option value="0"' + (db.s.auto ? '' : ' selected') + '>Wyłączone</option></select>';
   h += '<button class="btn sec" data-act="revoices" style="margin-top:12px">Odśwież listę głosów</button>';
   h += '<p class="mute">Lepsze głosy pobierzesz na iPhonie w: Ustawienia → Dostępność → Treści czytane na głos → Głosy. Safari nie zawsze pokazuje wszystkie pobrane głosy; po pobraniu zamknij Safari całkiem lub uruchom telefon ponownie.</p></div>';
+  if (APP.settingsExtra) h += APP.settingsExtra();
   h += '<div class="card"><h2>Kopia postępów</h2><p class="mute">Postępy są zapisane na tym urządzeniu. Aby przenieść je na inne urządzenie, skopiuj kod i wklej go tam.</p>' +
     '<button class="btn sec" data-act="export">Pokaż kod do skopiowania</button><textarea id="xfer" placeholder="Tutaj pojawi się kod lub wklej kod z innego urządzenia"></textarea><div style="height:10px"></div>' +
     '<button class="btn sec" data-act="copy">Kopiuj</button><button class="btn blue" data-act="import">Wczytaj postępy z kodu</button></div>';
@@ -623,6 +663,7 @@ document.addEventListener('click', function (e) {
   var a = el.getAttribute('data-act'), c = el.getAttribute('data-c');
   if (el.tagName === 'SELECT') return;
   switch (a) {
+    case 'mix': return startMix(c);
     case 'revoices': loadVoices(); return render();
     case 'story': curK = 'c'; return go({ name: 'story', c: c, id: el.getAttribute('data-id'), page: 0 });
     case 'rplay': if (RD.playing) stopRead(); else startRead(0); return;
@@ -632,7 +673,7 @@ document.addEventListener('click', function (e) {
       pt.hidden = !pt.hidden; el.textContent = pt.hidden ? '🇵🇱 Pokaż po polsku' : '🇵🇱 Ukryj tłumaczenie'; return;
     }
     case 'rpage': stopRead(); return go({ name: 'story', c: view.c, id: view.id, page: (view.page || 0) + (+el.getAttribute('data-d')) });
-    case 'rdone': stopRead(); db.read[view.id] = true; save(); curK = 'c'; return go({ name: 'course', c: view.c });
+    case 'rdone': stopRead(); db.read[view.id] = true; save(); curK = 'c'; if (APP.check) APP.check(); return go({ name: 'course', c: view.c });
     case 'sclose': return closeSheet();
     case 'sword': return speak(RD.sheet.key, view.c);
     case 'ssent': stopRead(); return speak(RD.sheet.sentence, view.c, RD.slow);
@@ -704,11 +745,16 @@ document.addEventListener('click', function (e) {
       return;
     }
     case 'reset':
-      if (confirm('Na pewno usunąć wszystkie postępy? Tego nie da się cofnąć.')) { db.p = {}; db.days = {}; save(); go({ name: 'home' }); }
+      if (confirm('Na pewno usunąć wszystkie postępy? Tego nie da się cofnąć.')) { db.p = {}; db.days = {}; db.st = {}; db.badges = {}; db.best = {}; save(); go({ name: 'home' }); }
       return;
+    default:
+      if (APP.actions && APP.actions[a]) return APP.actions[a](el, e);
   }
 });
-function loadDbFix() { db.p = db.p || {}; db.days = db.days || {}; db.rw = db.rw || {}; db.read = db.read || {}; db.s = Object.assign({ rate: 0.9, vol: 1, loud: true, auto: true, ves: '', ven: '', vit: '' }, db.s || {}); }
+function loadDbFix() {
+  db.p = db.p || {}; db.days = db.days || {}; db.rw = db.rw || {}; db.read = db.read || {}; db.st = db.st || {}; db.badges = db.badges || {}; db.best = db.best || {};
+  db.s = Object.assign({ rate: 0.9, vol: 1, loud: true, auto: true, goal: 30, gapType: 'choice', ves: '', ven: '', vit: '' }, db.s || {});
+}
 
 document.addEventListener('change', function (e) {
   var el = e.target; if (el.tagName !== 'SELECT') return;
@@ -717,6 +763,8 @@ document.addEventListener('change', function (e) {
   else if (a === 'rate') db.s.rate = parseFloat(el.value);
   else if (a === 'auto') db.s.auto = el.value === '1';
   else if (a === 'loud') db.s.loud = el.value === '1';
+  else if (a === 'goal') db.s.goal = parseInt(el.value, 10);
+  else if (a === 'gaptype') db.s.gapType = el.value;
   save();
 });
 document.addEventListener('input', function (e) {
@@ -737,6 +785,12 @@ document.addEventListener('touchstart', function unlock() {
   if (hasTTS) { try { var u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); } catch (e) {} }
 }, { passive: true });
 
+Object.assign(APP, {
+  db: function () { return db; }, save: save, speak: speak, items: items, words: words, phrases: phrases, stories: stories, stats: stats,
+  streak: streak, today: today, COURSES: COURSES, go: go, render: render, esc: esc, plural: plural, shuffle: shuffle, norm: norm,
+  pct: pct, isHard: isHard, INT: INT, DAY: DAY, view: function () { return view; }, startMix: startMix, mixCount: mixCount, trBlock: trBlock
+});
+if (APP.ready) APP.ready();
 render();
 if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
   navigator.serviceWorker.register('sw.js').catch(function () {});
