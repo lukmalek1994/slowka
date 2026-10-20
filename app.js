@@ -26,6 +26,8 @@ function loadDb() {
   if (!d || typeof d !== 'object') d = {};
   d.p = d.p || {};
   d.days = d.days || {};
+  d.rw = d.rw || {};
+  d.read = d.read || {};
   d.s = Object.assign({ rate: 0.9, vol: 1, loud: true, auto: true, ves: '', ven: '', vit: '' }, d.s || {});
   if (d.s.vEs && !d.s.ves) d.s.ves = d.s.vEs;
   if (d.s.vEn && !d.s.ven) d.s.ven = d.s.vEn;
@@ -47,19 +49,36 @@ var pcache = {};
 function phrases(c) {
   if (!pcache[c]) {
     var seen = {};
-    pcache[c] = (window['PH_' + c.toUpperCase()] || []).filter(function (r) {
+    var up = c.toUpperCase();
+    pcache[c] = [].concat(window['PH_' + up] || [], window['PH_' + up + '_2'] || [], window['PH_' + up + '_3'] || []).filter(function (r) {
       if (!r || !r[0] || seen[r[0]]) return false; seen[r[0]] = 1; return true;
     }).map(function (r, i) { return { id: 'p:' + c + ':' + r[0], c: c, k: 'p', w: r[0], p: r[1], theme: r[2] || '', note: r[3] || '', ex: r[4] || '', tr: r[5] || '', i: i }; });
   }
   return pcache[c];
 }
-function items(c, k) { return k === 'p' ? phrases(c) : words(c); }
+function savedItems(c) {
+  var m = db.rw[c] || {};
+  return Object.keys(m).map(function (key, i) { var r = m[key]; return { id: 'r:' + c + ':' + key, c: c, k: 'r', w: key, p: r.p || '', ex: r.ex || '', tr: '', i: i }; });
+}
+function items(c, k) { return k === 'p' ? phrases(c) : k === 'r' ? savedItems(c) : words(c); }
+function stories(c) { return window['RD_' + c.toUpperCase()] || []; }
+function storyById(c, id) { return stories(c).filter(function (s) { return s.id === id; })[0]; }
+var wmaps = {};
+function wmap(c) {
+  if (!wmaps[c]) {
+    var m = {};
+    words(c).forEach(function (w) { m[w.w.toLowerCase().replace(/\(.*?\)/g, '').replace(/^(el|la|los|las|un|una|il|lo|i|gli|le|uno)\s+/, '').replace(/^(l'|un')/, '').trim()] = w.p; });
+    wmaps[c] = m;
+  }
+  return wmaps[c];
+}
 function groups(c, k) {
   var list = items(c, k), out = [];
   if (k === 'p') {
+    var byLabel = {};
     list.forEach(function (w) {
-      var g = out[out.length - 1];
-      if (!g || g.label !== w.theme) { g = { label: w.theme || 'Zwroty', list: [] }; out.push(g); }
+      var label = w.theme || 'Zwroty', g = byLabel[label];
+      if (!g) { g = byLabel[label] = { label: label, list: [] }; out.push(g); }
       g.list.push(w);
     });
   } else {
@@ -71,9 +90,10 @@ function groups(c, k) {
   return out;
 }
 var curK = 'w'; // aktywna zakładka: w = słówka, p = zwroty
+var curTheme = null; // indeks kategorii zwrotów (null = nie wybrano)
 function isHard(r) { return r.l >= 2 && r.b <= 4; }
-function stats(c, k) {
-  var ws = items(c, k || 'w'), now = Date.now(), s = { total: ws.length, learned: 0, due: 0, hard: 0, mastered: 0 };
+function stats(c, k, list) {
+  var ws = list || items(c, k || 'w'), now = Date.now(), s = { total: ws.length, learned: 0, due: 0, hard: 0, mastered: 0 };
   ws.forEach(function (w) {
     var r = db.p[w.id]; if (!r) return;
     s.learned++; if (r.d <= now) s.due++; if (r.b >= 5) s.mastered++; if (isHard(r)) s.hard++;
@@ -135,8 +155,8 @@ function ensurePlayback() {
 }
 document.addEventListener('visibilitychange', function () { if (document.hidden && silent) { try { silent.pause(); } catch (e) {} } });
 
-function speak(text, c, slow) {
-  if (!hasTTS) return;
+function speak(text, c, slow, onend) {
+  if (!hasTTS) { if (onend) onend(); return; }
   ensurePlayback();
   try {
     var u = new SpeechSynthesisUtterance(clean(text));
@@ -144,9 +164,12 @@ function speak(text, c, slow) {
     var v = voiceFor(c); if (v) u.voice = v;
     u.rate = slow ? 0.55 : db.s.rate;
     u.volume = typeof db.s.vol === 'number' ? db.s.vol : 1;
-    speechSynthesis.cancel();
+    if (onend) {
+      var done = false;
+      u.onend = u.onerror = function () { if (!done) { done = true; onend(); } };
+    } else speechSynthesis.cancel();
     speechSynthesis.speak(u);
-  } catch (e) {}
+  } catch (e) { if (onend) onend(); }
 }
 
 /* ---------- pomocnicze ---------- */
@@ -179,10 +202,14 @@ var $app = document.getElementById('app');
 var view = { name: 'home' };
 var S = null; // sesja nauki
 
-function go(v) { view = v; render(); window.scrollTo(0, 0); }
+function go(v) {
+  if (view && view.name === 'story' && v.name !== 'story') stopRead();
+  closeSheet();
+  view = v; render(); window.scrollTo(0, 0);
+}
 
 function render() {
-  var fn = { home: vHome, course: vCourse, lessons: vLessons, lesson: vLesson, intro: vIntro, quiz: vQuiz, summary: vSummary, settings: vSettings }[view.name] || vHome;
+  var fn = { home: vHome, course: vCourse, cat: vCat, story: vStory, myw: vMyw, lessons: vLessons, lesson: vLesson, intro: vIntro, quiz: vQuiz, summary: vSummary, settings: vSettings }[view.name] || vHome;
   $app.innerHTML = fn();
   if (view.name === 'quiz') afterQuiz();
 }
@@ -199,6 +226,7 @@ function vHome() {
       '<div class="bar"><i style="width:' + pct(s.learned + ps.learned, s.total + ps.total) + '%"></i></div><div class="chips">' +
       '<span class="chip">Słówka ' + s.learned + ' / ' + s.total + '</span>' +
       (ps.total ? '<span class="chip">Zwroty ' + ps.learned + ' / ' + ps.total + '</span>' : '') +
+      (stories(c).length ? '<span class="chip">Czytanki ' + stories(c).filter(function (x) { return db.read[x.id]; }).length + ' / ' + stories(c).length + '</span>' : '') +
       (due ? '<span class="chip hot">Do powtórki: ' + due + '</span>' : '') +
       (hard ? '<span class="chip hot">Trudne: ' + hard + '</span>' : '') + '</div></button>';
   });
@@ -206,15 +234,146 @@ function vHome() {
 }
 
 function vCourse() {
-  var c = view.c, co = COURSES[c], k = curK, isP = k === 'p', s = stats(c, k), fresh = s.total - s.learned;
+  var c = view.c, co = COURSES[c], k = curK, isP = k === 'p', s = stats(c, k === 'c' ? 'w' : k), fresh = s.total - s.learned;
   var h = '<button class="back" data-act="home">‹ Kursy</button><div class="top"><div class="grow"><h1>' + co.flag + ' ' + co.name + '</h1><div class="mute">' + co.sub + '</div></div></div>';
-  h += '<div class="tabs"><button class="tab' + (isP ? '' : ' on') + '" data-act="tab" data-k="w" data-c="' + c + '">Słówka</button><button class="tab' + (isP ? ' on' : '') + '" data-act="tab" data-k="p" data-c="' + c + '">Zwroty</button></div>';
+  h += '<div class="tabs">' + [['w', 'Słówka'], ['p', 'Zwroty'], ['c', 'Czytanki']].map(function (t) {
+    return '<button class="tab' + (k === t[0] ? ' on' : '') + '" data-act="tab" data-k="' + t[0] + '" data-c="' + c + '">' + t[1] + '</button>';
+  }).join('') + '</div>';
+  if (k === 'c') return h + vReads(c);
   h += '<div class="card"><div class="bar"><i style="width:' + pct(s.learned, s.total) + '%"></i></div><div class="chips">' +
     '<span class="chip">Poznane ' + s.learned + ' / ' + s.total + '</span><span class="chip">Opanowane ' + s.mastered + '</span></div></div>';
+  if (isP) {
+    if (s.due) h += '<button class="btn blue" data-act="review" data-c="' + c + '">Powtórka ze wszystkich kategorii<small>' + s.due + ' ' + plural(s.due, 'zwrot czeka', 'zwroty czekają', 'zwrotów czeka') + '</small></button>';
+    if (s.hard) h += '<button class="btn sec" data-act="hard" data-c="' + c + '">Trudne zwroty<small>' + s.hard + ' do przećwiczenia</small></button>';
+    h += '<h2 style="margin:16px 0 8px">Wybierz kategorię</h2><div class="card">';
+    groups(c, 'p').forEach(function (gr, g) {
+      var gs = stats(c, 'p', gr.list);
+      h += '<button class="lesson" data-act="cat" data-c="' + c + '" data-g="' + g + '"><div class="grow"><b>' + esc(gr.label) + '</b>' + (gs.due ? ' <span class="chip hot">do powtórki ' + gs.due + '</span>' : '') +
+        '<div class="mini"><i style="width:' + pct(gs.learned, gs.total) + '%"></i></div></div><span class="mute">' + gs.learned + '/' + gs.total + '</span></button>';
+    });
+    return h + '</div>';
+  }
   h += '<button class="btn" data-act="learn" data-c="' + c + '"' + (fresh ? '' : ' disabled') + '>' + (isP ? 'Ucz się nowych zwrotów' : 'Ucz się nowych słów') + '<small>' + (fresh ? 'Kolejne ' + (isP ? 8 : 10) + (isP ? ' zwrotów' : ' słówek') : (s.total ? 'Wszystko poznane!' : 'Brak treści')) + '</small></button>';
   h += '<button class="btn blue" data-act="review" data-c="' + c + '"' + (s.due ? '' : ' disabled') + '>Powtórka<small>' + (s.due ? s.due + ' ' + (isP ? plural(s.due, 'zwrot czeka', 'zwroty czekają', 'zwrotów czeka') : plural(s.due, 'słówko czeka', 'słówka czekają', 'słówek czeka')) : 'Nic na dziś') + '</small></button>';
   h += '<button class="btn sec" data-act="hard" data-c="' + c + '"' + (s.hard ? '' : ' disabled') + '>' + (isP ? 'Trudne zwroty' : 'Trudne słówka') + '<small>' + (s.hard ? s.hard + ' do przećwiczenia' : (isP ? 'Brak trudnych zwrotów' : 'Brak trudnych słówek')) + '</small></button>';
   h += '<button class="btn sec" data-act="lessons" data-c="' + c + '">' + (isP ? 'Zwroty według tematów' : 'Lista słówek') + '<small>Kliknij, aby usłyszeć wymowę</small></button>';
+  return h;
+}
+
+/* ---------- czytanki ---------- */
+function vReads(c) {
+  var sts = stories(c), h = '<h2 style="margin:6px 0 8px">Historie</h2>';
+  if (!sts.length) h += '<div class="card mute">Brak czytanek dla tego języka.</div>';
+  sts.forEach(function (st) {
+    var words = st.pages.reduce(function (n, pg) { return n + pg.reduce(function (m, p) { return m + p.t.split(/\s+/).length; }, 0); }, 0);
+    h += '<button class="card course" data-act="story" data-c="' + c + '" data-id="' + esc(st.id) + '"><div class="row"><div class="grow" style="flex:1"><h2>' + esc(st.title) + '</h2><div class="mute">' + esc(st.titlePl || '') + '</div></div>' +
+      (db.read[st.id] ? '<span class="chip" style="background:var(--ok-bg);color:#0d6e43">✓ przeczytane</span>' : '') + '</div>' +
+      '<div class="mute" style="margin-top:8px">' + esc(st.blurb || '') + '</div><div class="chips" style="margin-top:10px"><span class="chip">' + esc(st.level) + '</span><span class="chip">' + esc(st.kind || '') + '</span><span class="chip">' + st.pages.length + ' ' + plural(st.pages.length, 'strona', 'strony', 'stron') + ' · ~' + words + ' słów</span></div></button>';
+  });
+  var sv = savedItems(c), ss = stats(c, 'r');
+  h += '<h2 style="margin:18px 0 8px">Moje słówka z czytanek</h2><div class="card"><div class="chips"><span class="chip">Zapisane: ' + sv.length + '</span><span class="chip">Poznane ' + ss.learned + ' / ' + ss.total + '</span></div>' +
+    '<p class="mute" style="margin:10px 0 0">Kliknij słowo w tekście i wybierz „Zapisz”, a pojawi się tutaj.</p></div>';
+  h += '<button class="btn" data-act="rlearn" data-c="' + c + '"' + (ss.total - ss.learned ? '' : ' disabled') + '>Ucz się zapisanych słów<small>' + (ss.total - ss.learned ? 'Nowe słowa z czytanek' : 'Brak nowych') + '</small></button>';
+  h += '<button class="btn blue" data-act="rreview" data-c="' + c + '"' + (ss.due ? '' : ' disabled') + '>Powtórka zapisanych<small>' + (ss.due ? ss.due + ' do powtórki' : 'Nic na dziś') + '</small></button>';
+  h += '<button class="btn sec" data-act="myw" data-c="' + c + '"' + (sv.length ? '' : ' disabled') + '>Lista moich słówek</button>';
+  return h;
+}
+
+function vMyw() {
+  var c = view.c, sv = savedItems(c);
+  var h = '<button class="back" data-act="course" data-c="' + c + '">‹ Czytanki</button><h1>Moje słówka</h1><div class="card">';
+  if (!sv.length) h += '<div class="mute">Brak zapisanych słów.</div>';
+  sv.forEach(function (w) {
+    h += '<div class="wrow" data-act="say" data-t="' + esc(w.w) + '" data-c="' + c + '"><button class="spk sm" aria-label="Odtwórz">🔊</button><div class="grow" style="flex:1"><div class="w">' + esc(w.w) + '</div><div class="t">' + esc(w.p) + '</div></div>' +
+      '<button class="icon" data-act="mywdel" data-key="' + esc(w.w) + '" data-c="' + c + '" aria-label="Usuń">✕</button></div>';
+  });
+  return h + '</div>';
+}
+
+var TOK = { es: /\p{L}+/gu, it: /\p{L}+['’]?/gu, en: /\p{L}+(?:['’]\p{L}+)*/gu };
+function splitSentences(t) {
+  var m = t.match(/[^.!?…]+(?:[.!?…]+["'»”’)\]]*|$)\s*/g);
+  return (m && m.length ? m : [t]).filter(function (s) { return s.trim(); });
+}
+function sentenceHtml(c, s) {
+  var re = new RegExp(TOK[c].source, 'gu'), out = '', last = 0, m;
+  while ((m = re.exec(s))) {
+    out += esc(s.slice(last, m.index));
+    out += '<span class="wd" data-key="' + esc(m[0].toLowerCase().replace(/’/g, "'")) + '">' + esc(m[0]) + '</span>';
+    last = m.index + m[0].length;
+  }
+  return out + esc(s.slice(last));
+}
+var RD = { token: 0, playing: false, slow: false, sheet: null };
+function vStory() {
+  var c = view.c, st = storyById(c, view.id), pg = view.page || 0;
+  if (!st) return '<button class="back" data-act="course" data-c="' + c + '">‹ Czytanki</button><p>Nie znaleziono historii.</p>';
+  var last = pg === st.pages.length - 1;
+  var h = '<div class="top"><button class="back" data-act="course" data-c="' + c + '">‹ Czytanki</button><span class="mute">Strona ' + (pg + 1) + ' / ' + st.pages.length + '</span></div><h1 style="font-size:22px">' + esc(st.title) + '</h1>';
+  h += '<div class="rtool"><button class="btn" id="rplay" data-act="rplay" style="margin:0;flex:1">▶ Czytaj stronę</button><button class="icon' + (RD.slow ? ' on' : '') + '" data-act="rslow" id="rslow">🐢</button></div>';
+  h += '<div class="card reader">';
+  st.pages[pg].forEach(function (p, pi) {
+    h += '<div class="para">' + splitSentences(p.t).map(function (s, si) { return '<span class="snt" data-i="' + pi + '-' + si + '">' + sentenceHtml(c, s) + '</span>'; }).join('') + '</div>';
+    if (p.pl) h += '<button class="trbtn" data-act="ptr" data-p="' + pi + '">🇵🇱 Pokaż po polsku</button><div class="trtext" id="ptr-' + pi + '" hidden>' + esc(p.pl) + '</div>';
+  });
+  h += '</div><div class="row2" style="margin-top:6px">' + (pg ? '<button class="btn sec" data-act="rpage" data-d="-1" style="flex:1;margin:0">‹ Wstecz</button>' : '') +
+    (last ? '<button class="btn" data-act="rdone" style="flex:1;margin:0">Zakończ ✓</button>' : '<button class="btn" data-act="rpage" data-d="1" style="flex:1;margin:0">Dalej ›</button>') + '</div>';
+  return h;
+}
+function setPlayBtn() {
+  var b = document.getElementById('rplay'); if (b) b.textContent = RD.playing ? '⏹ Stop' : '▶ Czytaj stronę';
+}
+function clearHL() { [].forEach.call(document.querySelectorAll('.snt.on'), function (e) { e.classList.remove('on'); }); }
+function stopRead() {
+  RD.token++; RD.playing = false;
+  if (hasTTS) { try { speechSynthesis.cancel(); } catch (e) {} }
+  clearHL(); setPlayBtn();
+}
+function startRead(from) {
+  var els = [].slice.call(document.querySelectorAll('.snt'));
+  if (!els.length) return;
+  var tok = ++RD.token, c = view.c;
+  RD.playing = true; setPlayBtn();
+  if (hasTTS) { try { speechSynthesis.cancel(); } catch (e) {} }
+  (function next(i) {
+    if (tok !== RD.token) return;
+    clearHL();
+    if (i >= els.length) {
+      RD.playing = false; setPlayBtn();
+      var st = storyById(c, view.id);
+      if (st && (view.page || 0) + 1 < st.pages.length) { view.page = (view.page || 0) + 1; render(); startRead(0); }
+      return;
+    }
+    els[i].classList.add('on');
+    try { els[i].scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) {}
+    speak(els[i].textContent, c, RD.slow, function () { next(i + 1); });
+  })(from || 0);
+}
+function closeSheet() { var s = document.getElementById('sheet'); if (s) s.remove(); RD.sheet = null; }
+function openWord(el) {
+  var c = view.c, st = storyById(c, view.id), key = el.getAttribute('data-key');
+  var gl = (st && st.gloss && st.gloss[key]) || wmap(c)[key] || '';
+  var snt = el.closest('.snt');
+  RD.sheet = { key: key, gloss: gl, sentence: snt ? snt.textContent.trim() : '', idx: snt ? [].indexOf.call(document.querySelectorAll('.snt'), snt) : 0 };
+  speak(el.textContent, c);
+  drawSheet();
+}
+function drawSheet() {
+  var d = RD.sheet, c = view.c, sv = !!(db.rw[c] && db.rw[c][d.key]);
+  var s = document.getElementById('sheet');
+  if (!s) { s = document.createElement('div'); s.id = 'sheet'; document.body.appendChild(s); }
+  s.innerHTML = '<div class="sheet-in"><button class="icon sx" data-act="sclose" aria-label="Zamknij">✕</button><div class="sw">' + esc(d.key) + '</div><div class="sg">' + (d.gloss ? esc(d.gloss) : '<span class="mute">Brak tłumaczenia tego słowa</span>') + '</div>' +
+    '<div class="sb"><button class="icon" data-act="sword">🔊 Słowo</button><button class="icon" data-act="ssent">🔊 Zdanie</button><button class="icon" data-act="sfrom">▶ Czytaj stąd</button><button class="icon' + (sv ? ' on' : '') + '" data-act="ssave">' + (sv ? '✓ Zapisano' : '＋ Zapisz') + '</button></div></div>';
+}
+
+function vCat() {
+  var c = view.c, gr = groups(c, 'p')[view.g] || { label: '', list: [] }, s = stats(c, 'p', gr.list), fresh = s.total - s.learned;
+  var h = '<button class="back" data-act="course" data-c="' + c + '">‹ Kategorie</button><div class="top"><div class="grow"><h1>' + esc(gr.label) + '</h1><div class="mute">' + COURSES[c].flag + ' ' + COURSES[c].name + '</div></div></div>';
+  h += '<div class="card"><div class="bar"><i style="width:' + pct(s.learned, s.total) + '%"></i></div><div class="chips"><span class="chip">Poznane ' + s.learned + ' / ' + s.total + '</span><span class="chip">Opanowane ' + s.mastered + '</span></div></div>';
+  h += '<button class="btn" data-act="learn" data-c="' + c + '"' + (fresh ? '' : ' disabled') + '>Ucz się nowych zwrotów<small>' + (fresh ? 'Kolejne ' + Math.min(8, fresh) + ' zwrotów z tej kategorii' : 'Wszystko poznane!') + '</small></button>';
+  h += '<button class="btn blue" data-act="review" data-c="' + c + '"' + (s.due ? '' : ' disabled') + '>Powtórka<small>' + (s.due ? s.due + ' ' + plural(s.due, 'zwrot czeka', 'zwroty czekają', 'zwrotów czeka') : 'Nic na dziś') + '</small></button>';
+  h += '<button class="btn sec" data-act="hard" data-c="' + c + '"' + (s.hard ? '' : ' disabled') + '>Trudne zwroty<small>' + (s.hard ? s.hard + ' do przećwiczenia' : 'Brak trudnych zwrotów') + '</small></button>';
+  h += '<button class="btn sec" data-act="lesson" data-c="' + c + '" data-g="' + view.g + '">Lista zwrotów<small>Kliknij, aby usłyszeć wymowę</small></button>';
   return h;
 }
 
@@ -232,7 +391,7 @@ function dotClass(r) { if (!r) return ''; if (isHard(r)) return 'hard'; return '
 
 function vLesson() {
   var c = view.c, gr = groups(c, curK)[view.g] || { label: '', list: [] }, part = gr.list;
-  var h = '<button class="back" data-act="lessons" data-c="' + c + '">‹ Lista</button><h1>' + esc(gr.label) + '</h1><div class="card">';
+  var h = (curK === 'p' ? '<button class="back" data-act="cat" data-c="' + c + '" data-g="' + view.g + '">‹ Kategoria</button>' : '<button class="back" data-act="lessons" data-c="' + c + '">‹ Lista</button>') + '<h1>' + esc(gr.label) + '</h1><div class="card">';
   part.forEach(function (w) {
     h += '<div class="wrow" data-act="word" data-id="' + esc(w.id) + '"><button class="spk sm" aria-label="Odtwórz">🔊</button><div class="grow" style="flex:1"><div class="w">' + esc(w.w) + '</div><div class="t">' + esc(w.p) + '</div></div><span class="dot ' + dotClass(db.p[w.id]) + '"></span></div>';
     if (view.open === w.id) h += '<div class="wex">' + (w.note ? '<div>' + esc(w.note) + '</div>' : '') + (w.ex ? '<div data-act="say-ex" data-id="' + esc(w.id) + '">' + esc(w.ex) + ' 🔊</div>' + trBlock(w, view.trOpen === w.id, 'list') : '') + '</div>';
@@ -251,13 +410,14 @@ function meta(w) {
   return t ? '<div class="meta">' + t + '</div>' : '';
 }
 
-function startSession(c, mode) {
-  var k = curK, ws = items(c, k), now = Date.now(), list = [];
+function startSession(c, mode, kk) {
+  var k = kk || curK, ws = items(c, k), now = Date.now(), list = [], theme = null;
+  if (k === 'p' && curTheme !== null) { var gr = groups(c, 'p')[curTheme]; if (gr) { ws = gr.list; theme = curTheme; } }
   if (mode === 'learn') list = ws.filter(function (w) { return !db.p[w.id]; }).slice(0, k === 'p' ? 8 : 10);
   else if (mode === 'review') list = ws.filter(function (w) { var r = db.p[w.id]; return r && r.d <= now; }).sort(function (a, b) { return db.p[a.id].d - db.p[b.id].d; }).slice(0, 20);
   else list = shuffle(ws.filter(function (w) { var r = db.p[w.id]; return r && isHard(r); })).slice(0, 15);
-  if (!list.length) return go({ name: 'course', c: c });
-  S = { c: c, k: k, mode: mode, words: list, queue: [], done: 0, ok: 0, bad: 0, intro: mode === 'learn' ? list.slice() : [], ii: 0, q: null };
+  if (!list.length) return go(theme !== null ? { name: 'cat', c: c, g: theme } : { name: 'course', c: c });
+  S = { c: c, k: k, theme: theme, mode: mode, words: list, queue: [], done: 0, ok: 0, bad: 0, intro: mode === 'learn' ? list.slice() : [], ii: 0, q: null };
   if (S.intro.length) { go({ name: 'intro' }); speakIntro(); }
   else beginQuiz();
 }
@@ -290,7 +450,7 @@ function pickType(q) {
 }
 function makeOptions(q) {
   var key = (q.type === 'c1' || q.type === 'lc') ? 'p' : 'w';
-  var pool = shuffle(items(S.c, S.k).filter(function (w) { return w.id !== q.w.id && w[key] !== q.w[key]; }));
+  var pool = shuffle((S.k === 'r' ? words(S.c) : items(S.c, S.k)).filter(function (w) { return w.id !== q.w.id && w[key] !== q.w[key]; }));
   if (S.k === 'p') pool = pool.filter(function (w) { return w.theme === q.w.theme; }).concat(pool.filter(function (w) { return w.theme !== q.w.theme; }));
   var others = [], seen = {};
   pool.forEach(function (w) { if (others.length < 3 && !seen[w[key]]) { seen[w[key]] = 1; others.push(w); } });
@@ -402,7 +562,7 @@ function vSummary() {
   var s = stats(S.c, S.k);
   return '<div class="card stage"><div class="sum">' + icon + '</div><h1>Sesja zakończona</h1><div class="mute">' + S.words.length + ' ' + (S.k === 'p' ? plural(S.words.length, 'zwrot', 'zwroty', 'zwrotów') : plural(S.words.length, 'słówko', 'słówka', 'słówek')) + '</div>' +
     '<div class="statg"><div><b>' + acc + '%</b>trafnych odpowiedzi</div><div><b>' + S.bad + '</b>pomyłek</div><div><b>' + s.learned + '</b>poznanych razem</div><div><b>' + s.due + '</b>do powtórki</div></div></div>' +
-    '<button class="btn" data-act="course" data-c="' + S.c + '">Gotowe</button>';
+    (S.theme !== null && S.theme !== undefined ? '<button class="btn" data-act="cat" data-c="' + S.c + '" data-g="' + S.theme + '">Gotowe</button>' : '<button class="btn" data-act="course" data-c="' + S.c + '">Gotowe</button>');
 }
 
 /* ---------- ustawienia ---------- */
@@ -449,14 +609,39 @@ function checkOrder() {
 }
 
 document.addEventListener('click', function (e) {
+  var wd = e.target.closest('.wd'); if (wd && view.name === 'story') return openWord(wd);
   var el = e.target.closest('[data-act]'); if (!el) return;
   var a = el.getAttribute('data-act'), c = el.getAttribute('data-c');
   if (el.tagName === 'SELECT') return;
   switch (a) {
+    case 'story': curK = 'c'; return go({ name: 'story', c: c, id: el.getAttribute('data-id'), page: 0 });
+    case 'rplay': if (RD.playing) stopRead(); else startRead(0); return;
+    case 'rslow': RD.slow = !RD.slow; el.classList.toggle('on', RD.slow); return;
+    case 'ptr': {
+      var pt = document.getElementById('ptr-' + el.getAttribute('data-p'));
+      pt.hidden = !pt.hidden; el.textContent = pt.hidden ? '🇵🇱 Pokaż po polsku' : '🇵🇱 Ukryj tłumaczenie'; return;
+    }
+    case 'rpage': stopRead(); return go({ name: 'story', c: view.c, id: view.id, page: (view.page || 0) + (+el.getAttribute('data-d')) });
+    case 'rdone': stopRead(); db.read[view.id] = true; save(); curK = 'c'; return go({ name: 'course', c: view.c });
+    case 'sclose': return closeSheet();
+    case 'sword': return speak(RD.sheet.key, view.c);
+    case 'ssent': stopRead(); return speak(RD.sheet.sentence, view.c, RD.slow);
+    case 'sfrom': { var from = RD.sheet.idx; closeSheet(); return startRead(from); }
+    case 'ssave': {
+      var sh = RD.sheet, rc = view.c; if (!sh.gloss) return;
+      db.rw[rc] = db.rw[rc] || {};
+      if (db.rw[rc][sh.key]) delete db.rw[rc][sh.key]; else db.rw[rc][sh.key] = { p: sh.gloss, ex: sh.sentence };
+      save(); return drawSheet();
+    }
+    case 'rlearn': return startSession(c, 'learn', 'r');
+    case 'rreview': return startSession(c, 'review', 'r');
+    case 'myw': return go({ name: 'myw', c: c });
+    case 'mywdel': e.stopPropagation(); if (db.rw[c]) delete db.rw[c][el.getAttribute('data-key')]; save(); return render();
     case 'home': S = null; return go({ name: 'home' });
     case 'settings': return go({ name: 'settings' });
-    case 'course': return go({ name: 'course', c: c });
-    case 'tab': curK = el.getAttribute('data-k'); return go({ name: 'course', c: c });
+    case 'course': curTheme = null; return go({ name: 'course', c: c });
+    case 'tab': curK = el.getAttribute('data-k'); curTheme = null; return go({ name: 'course', c: c });
+    case 'cat': curK = 'p'; curTheme = +el.getAttribute('data-g'); return go({ name: 'cat', c: c, g: curTheme });
     case 'tadd': { var qa = S.q; if (qa.state) return; qa.built.push(+el.getAttribute('data-i')); return render(); }
     case 'tdel': { var qd = S.q; if (qd.state) return; qd.built.splice(+el.getAttribute('data-i'), 1); return render(); }
     case 'ocheck': return checkOrder();
@@ -513,7 +698,7 @@ document.addEventListener('click', function (e) {
       return;
   }
 });
-function loadDbFix() { db.p = db.p || {}; db.days = db.days || {}; db.s = Object.assign({ rate: 0.9, vol: 1, loud: true, auto: true, ves: '', ven: '', vit: '' }, db.s || {}); }
+function loadDbFix() { db.p = db.p || {}; db.days = db.days || {}; db.rw = db.rw || {}; db.read = db.read || {}; db.s = Object.assign({ rate: 0.9, vol: 1, loud: true, auto: true, ves: '', ven: '', vit: '' }, db.s || {}); }
 
 document.addEventListener('change', function (e) {
   var el = e.target; if (el.tagName !== 'SELECT') return;
