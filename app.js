@@ -12,8 +12,13 @@ var COURSES = {
   it: { name: 'Italiano', flag: '🇮🇹', lang: 'it-IT', sub: '1000 najczęstszych słów · Włochy',
         raw: function () { return [].concat(join(window.WORDS_IT_1, window.TR_IT_1), join(window.WORDS_IT_2, window.TR_IT_2)); }, max: 1000 },
   en: { name: 'English', flag: '🇺🇸', lang: 'en-US', sub: 'Trudniejsze słownictwo B2 → C1 · USA',
-        raw: function () { return join(window.WORDS_EN_1, window.TR_EN_1); } }
+        raw: function () { return join(window.WORDS_EN_1, window.TR_EN_1); } },
+  en2: { name: 'English B1–B2', flag: '🇬🇧', lang: 'en-US', sub: '1000 najczęstszych słów · USA (B1 → B2)',
+        raw: function () { return [].concat(join(window.WORDS_EN2_1, window.TR_EN2_1), join(window.WORDS_EN2_2, window.TR_EN2_2), join(window.WORDS_EN2_3, window.TR_EN2_3), join(window.WORDS_EN2_4, window.TR_EN2_4)); }, max: 1000 }
 };
+// kurs en2 używa tego samego głosu / języka co 'en'
+function baseLang(c) { return c === 'en2' ? 'en' : c; }
+function vkey(c) { return 'v' + baseLang(c); }
 function join(rows, tr) {
   return (rows || []).map(function (r, i) { return [r[0], r[1], r[2], (tr && tr.length === rows.length && tr[i]) || '']; });
 }
@@ -127,7 +132,7 @@ function langVoices(c) {
 function voiceFor(c) {
   var lang = COURSES[c].lang.toLowerCase();
   var list = langVoices(c);
-  var saved = db.s['v' + c];
+  var saved = db.s[vkey(c)];
   if (saved) { for (var i = 0; i < list.length; i++) if (list[i].voiceURI === saved) return list[i]; }
   var exact = list.filter(function (v) { return v.lang.replace('_', '-').toLowerCase() === lang; });
   if (exact.length) list = exact;
@@ -305,6 +310,7 @@ function vMyw() {
 }
 
 var TOK = { es: /\p{L}+/gu, it: /\p{L}+['’]?/gu, en: /\p{L}+(?:['’]\p{L}+)*/gu };
+TOK.en2 = TOK.en;
 function splitSentences(t) {
   var m = t.match(/[^.!?…]+(?:[.!?…]+["'»”’)\]]*|$)\s*/g);
   return (m && m.length ? m : [t]).filter(function (s) { return s.trim(); });
@@ -617,12 +623,12 @@ function voiceSelect(c, label) {
   var cur = voiceFor(c), h = '<label>' + label + ' <span class="mute" style="font-weight:400">· głosów: ' + list.length + '</span></label><div class="row2"><select data-act="voice" data-c="' + c + '">';
   if (!list.length) h += '<option>Brak głosów na tym urządzeniu</option>';
   list.forEach(function (v) { h += '<option value="' + esc(v.voiceURI) + '"' + (cur && cur.voiceURI === v.voiceURI ? ' selected' : '') + '>' + esc(v.name + ' · ' + v.lang.replace('_', '-') + ' · ' + vqLabel(v)) + '</option>'; });
-  return h + '</select><button class="icon" data-act="say" data-t="' + ({ es: 'Hola, ¿cómo estás?', it: 'Ciao, come stai?', en: 'Hello, how are you?' }[c]) + '" data-c="' + c + '">🔊</button></div>';
+  return h + '</select><button class="icon" data-act="say" data-t="' + ({ es: 'Hola, ¿cómo estás?', it: 'Ciao, come stai?', en: 'Hello, how are you?', en2: 'Hello, how are you?' }[c]) + '" data-c="' + c + '">🔊</button></div>';
 }
 function vSettings() {
   var h = '<button class="back" data-act="home">‹ Wróć</button><h1>Ustawienia</h1><div class="card"><h2>Głos</h2>';
   if (!hasTTS) h += '<p class="mute">Ta przeglądarka nie obsługuje syntezy mowy.</p>';
-  h += voiceSelect('es', '🇪🇸 Hiszpański') + voiceSelect('it', '🇮🇹 Włoski') + voiceSelect('en', '🇺🇸 Angielski');
+  h += voiceSelect('es', '🇪🇸 Hiszpański') + voiceSelect('it', '🇮🇹 Włoski') + voiceSelect('en', '🇺🇸 Angielski (oba kursy)');
   h += '<label>Głośność wymowy: <span id="volv">' + Math.round(db.s.vol * 100) + '%</span></label><div class="row2"><input type="range" id="vol" min="0" max="100" step="5" value="' + Math.round(db.s.vol * 100) + '" style="flex:1"><button class="icon" data-act="say" data-t="Hola, hello, ciao" data-c="es">🔊</button></div>';
   h += '<label>Odtwarzaj mimo trybu cichego</label><select data-act="loud"><option value="1"' + (db.s.loud ? ' selected' : '') + '>Włączone</option><option value="0"' + (db.s.loud ? '' : ' selected') + '>Wyłączone</option></select>';
   h += '<p class="mute">Jeśli nadal nic nie słychać, sprawdź przełącznik dzwonka z boku iPhone\'a i głośność multimediów (przyciski głośności).</p>';
@@ -759,7 +765,7 @@ function loadDbFix() {
 document.addEventListener('change', function (e) {
   var el = e.target; if (el.tagName !== 'SELECT') return;
   var a = el.getAttribute('data-act');
-  if (a === 'voice') db.s['v' + el.getAttribute('data-c')] = el.value;
+  if (a === 'voice') db.s[vkey(el.getAttribute('data-c'))] = el.value;
   else if (a === 'rate') db.s.rate = parseFloat(el.value);
   else if (a === 'auto') db.s.auto = el.value === '1';
   else if (a === 'loud') db.s.loud = el.value === '1';

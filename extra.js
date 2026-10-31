@@ -9,6 +9,7 @@ function dayKey(d) { d = d || new Date(); return d.getFullYear() + '-' + (d.getM
 function shuffle(a) { return APP.shuffle(a); }
 function rnd(n) { return Math.floor(Math.random() * n); }
 function pick(a) { return a[rnd(a.length)]; }
+function isEn(c) { return c === 'en' || c === 'en2'; }
 function cname(c) { return APP.COURSES[c].flag + ' ' + APP.COURSES[c].name; }
 
 /* ================= statystyki, cel dzienny ================= */
@@ -76,7 +77,7 @@ var BADGES = [
   { id: 'goal7', i: '🎯', t: 'Systematyczny', d: 'Cel dzienny 7 razy', f: function (m) { return m.goalDays >= 7; } },
   { id: 'rd15', i: '⏱', t: 'Szybki', d: 'Runda na czas: 15 punktów', f: function (m) { return m.bestRound >= 15; } },
   { id: 'rd30', i: '⚡', t: 'Błyskawica', d: 'Runda na czas: 30 punktów', f: function (m) { return m.bestRound >= 30; } },
-  { id: 'poly', i: '🌍', t: 'Poliglota', d: '20 słówek w każdym z 3 języków', f: function (m) { return Object.keys(m.perCourse).every(function (c) { return m.perCourse[c] >= 20; }); } },
+  { id: 'poly', i: '🌍', t: 'Poliglota', d: '20 słówek w każdym z 3 języków', f: function (m) { return Object.keys(m.perCourse).filter(function (c) { return c !== 'en2'; }).every(function (c) { return m.perCourse[c] >= 20; }); } },
   { id: 'gap50', i: '✍️', t: 'Mistrz luk', d: '50 poprawnych luk', f: function (m) { return (m.dr.gap || 0) >= 50; } },
   { id: 'dict50', i: '🎧', t: 'Uważny słuchacz', d: '50 poprawnych dyktand', f: function (m) { return (m.dr.dict || 0) >= 50; } },
   { id: 'num50', i: '🔢', t: 'Mistrz liczb', d: '50 poprawnych odpowiedzi z liczb i czasu', f: function (m) { return (m.dr.num || 0) >= 50; } }
@@ -205,7 +206,7 @@ function enOrd(n) {
   if (n === 30) return 'thirtieth';
   return EN_T[Math.floor(n / 10)] + '-' + ORD_U[n % 10];
 }
-var NW = { es: esW, it: itW, en: enW };
+var NW = { es: esW, it: itW, en: enW, en2: enW };
 
 var MONTHS = {
   es: ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'],
@@ -217,7 +218,8 @@ var WEEK = {
   it: ['lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato', 'domenica'],
   en: ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 };
-var MONTHS_PL = ['styczeń', 'luty', 'marzec', 'kwiecień', 'maj', 'czerwiec', 'lipiec', 'sierpień', 'wrzesień', 'październik', 'listopad', 'grudzień'];
+MONTHS.en2 = MONTHS.en; WEEK.en2 = WEEK.en;
+var MONTHS_PL =['styczeń', 'luty', 'marzec', 'kwiecień', 'maj', 'czerwiec', 'lipiec', 'sierpień', 'wrzesień', 'październik', 'listopad', 'grudzień'];
 var WEEK_PL = ['poniedziałek', 'wtorek', 'środa', 'czwartek', 'piątek', 'sobota', 'niedziela'];
 
 function timeWords(c, h, m) {
@@ -249,7 +251,7 @@ function dateWords(c, d, mo) {
   if (c === 'it') return 'il ' + (d === 1 ? 'primo' : itW(d)) + ' ' + MONTHS.it[mo - 1];
   return MONTHS.en[mo - 1] + ' ' + enOrd(d);
 }
-function dateDigits(c, d, mo) { return c === 'en' ? mo + '/' + d : (d < 10 ? '0' + d : d) + '.' + (mo < 10 ? '0' + mo : mo); }
+function dateDigits(c, d, mo) { return isEn(c) ? mo + '/' + d : (d < 10 ? '0' + d : d) + '.' + (mo < 10 ? '0' + mo : mo); }
 function priceWords(c, eur, ct) {
   if (c === 'es') return (eur === 1 ? 'un euro' : esW(eur).replace(/veintiuno$/, 'veintiún').replace(/uno$/, 'un') + ' euros') + (ct ? ' con ' + esW(ct) : '');
   if (c === 'it') return (eur === 1 ? 'un euro' : itW(eur) + ' euro') + (ct ? ' e ' + itW(ct) : '');
@@ -257,7 +259,7 @@ function priceWords(c, eur, ct) {
 }
 function priceDigits(c, eur, ct) {
   var cc = ct < 10 ? '0' + ct : ct;
-  return c === 'en' ? '$' + eur + '.' + cc : eur + ',' + cc + ' €';
+  return isEn(c) ? '$' + eur + '.' + cc : eur + ',' + cc + ' €';
 }
 
 function uniqueOpts(correct, makers, fmt) {
@@ -333,7 +335,7 @@ function dateQuestion(c) {
   while (opts.length < 4 && guard++ < 60) { var v = rnd(2) ? { d: 1 + rnd(28), mo: mo } : { d: d, mo: 1 + rnd(12) }, k = dateDigits(c, v.d, v.mo); if (!set[k]) { set[k] = 1; opts.push(v); } }
   var q = { course: c, tag: 'num', kind: 'choice', show: digits + ' — ' + words };
   if (rnd(2)) {
-    q.html = '<div class="mute">Posłuchaj i wybierz datę' + (c === 'en' ? ' (miesiąc/dzień)' : ' (dzień.miesiąc)') + '</div>'; q.say = words;
+    q.html = '<div class="mute">Posłuchaj i wybierz datę' + (isEn(c) ? ' (miesiąc/dzień)' : ' (dzień.miesiąc)') + '</div>'; q.say = words;
     q.options = shuffle(opts).map(function (o) { return { t: dateDigits(c, o.d, o.mo), ok: o === correct }; });
   } else {
     q.html = '<div class="big">' + digits + '</div><div class="mute" style="margin-top:6px">Wybierz zapis słowny</div>'; q.after = words;
@@ -342,7 +344,7 @@ function dateQuestion(c) {
   return q;
 }
 function priceQuestion(c) {
-  var eur = 1 + rnd(c === 'en' ? 99 : 99), ct = pick([0, 0, 50, 20, 90, 99, 75, 25]), words = priceWords(c, eur, ct), digits = priceDigits(c, eur, ct);
+  var eur = 1 + rnd(99), ct = pick([0, 0, 50, 20, 90, 99, 75, 25]), words = priceWords(c, eur, ct), digits = priceDigits(c, eur, ct);
   var correct = { e: eur, c: ct }, set = {}, opts = [correct]; set[digits] = 1; var guard = 0;
   while (opts.length < 4 && guard++ < 60) { var v = rnd(2) ? { e: Math.max(1, eur + pick([-10, -1, 1, 10])), c: ct } : { e: eur, c: pick([0, 50, 20, 90, 99, 75, 25]) }, k = priceDigits(c, v.e, v.c); if (!set[k]) { set[k] = 1; opts.push(v); } }
   var q = { course: c, tag: 'num', kind: 'choice', show: digits + ' — ' + words, html: '<div class="mute">Posłuchaj i wybierz cenę</div>', say: words };
